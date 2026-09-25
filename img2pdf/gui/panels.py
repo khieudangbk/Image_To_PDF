@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, 
 
 from ..fonts import FAMILIES, fit_font_px, get_fontset
 from ..model import Page, TextBlock
-from ..render import Geometry
+from ..render import page_geometry
 from ..settings import BACKGROUNDS, LANGUAGES, PAPERS, Settings
 
 KIND_NAMES = {"paragraph": "Đoạn văn", "heading": "Tiêu đề", "cell": "Ô bảng", "figure": "Hình ảnh"}
@@ -93,7 +93,7 @@ class EditorPanel(QWidget):
         return self.page.blocks[self.key[1]] if self.key[1] < len(self.page.blocks) else None
 
     def _scale(self) -> float:
-        return Geometry(self.page, self.settings.paper).s
+        return page_geometry(self.page, self.settings).s
 
     def set_target(self, page: Page | None, key, settings: Settings | None):
         self.page, self.key, self.settings = page, key, settings

@@ -11,7 +11,9 @@ from .ocr import OLine, OPar, ocr_paragraphs
 from .preprocess import Prepared
 from .settings import Settings
 from .tables import TableGrid, detect_rules, detect_tables
-from .vn_correct import correct_tokens, split_merged
+from .restore import flat_field
+from .vn_correct import (correct_tokens, fix_abbreviations, fix_confusions, fix_place_names, fix_surnames,
+                         is_syllable, join_split, repair_split, split_merged)
 
 _WORDLIKE = re.compile(r"\w", re.UNICODE)
 DARK_INK = 110  # HSV value below which a pixel is printed black ink rather than seal ink
@@ -64,19 +66,39 @@ def _mark_bold(lines: list[Line], ink: np.ndarray, fs: FontSet):
             for w in ln.words:
                 w.bold = ratios[id(w)] > ref * 1.6
             continue
-        share = sum(w.bold for w in long_words) / len(long_words)
-        if share >= 0.6 or share <= 0.2:
+        rs = [ratios[id(w)] for w in long_words if ratios[id(w)] > 0]
+        if len(rs) >= 3 and max(rs) - min(rs) < 0.25 * float(np.median(rs)):
+            # strokes are uniform across the line: one weight for all of it
+            uniform = float(np.median(rs)) > ref * 1.25
             for w in ln.words:
-                w.bold = share >= 0.6
+                w.bold = uniform
+            continue
+        share = sum(w.bold for w in long_words) / len(long_words)
+        if share >= 0.75:
+            for w in ln.words:
+                w.bold = True
+            continue
+        # mixed line ("label: **value**"): a word stays bold only when clearly heavier, or when
+        # it sits next to another bold word (runs of bold are the rule, lone bold is noise)
+        flags = [w.bold for w in ln.words]
+        for i, w in enumerate(ln.words):
+            if flags[i] and ratios[id(w)] < ref * 1.3:
+                near = (i > 0 and flags[i - 1]) or (i + 1 < len(flags) and flags[i + 1])
+                w.bold = near
 
 
 # ---------------------------------------------------------------- paragraph splitting
 
 def _split_segments(ol: OLine, words: list) -> list[Segment]:
     words = sorted(words, key=lambda w: w.bbox[0])
+    gaps = [b.bbox[0] - a.bbox[2] for a, b in zip(words, words[1:])]
+    typical = float(np.median(gaps)) if gaps else 0.0
     segs, cur = [], [words[0]]
     for prev, w in zip(words, words[1:]):
-        if w.bbox[0] - prev.bbox[2] > 2.5 * ol.x_size:
+        gap = w.bbox[0] - prev.bbox[2]
+        # a wide gap, or one far wider than the line's own word spacing (two columns that
+        # OCR read as a single line, like the two halves of an official letterhead)
+        if gap > 2.5 * ol.x_size or (len(words) >= 6 and gap > 1.3 * ol.x_size and gap > 4 * max(typical, 1)):
             segs.append((ol, cur))
             cur = []
         cur.append(w)
@@ -126,10 +148,11 @@ def split_paragraph(entries: list[Segment]) -> list[list[Segment]]:
 # ---------------------------------------------------------------- figures
 
 def _blue_mask(color: np.ndarray) -> np.ndarray:
-    """Ballpoint-pen blue; light bluish watermarks are excluded by the value limit."""
+    """Ballpoint-pen blue. Light bluish watermarks are above the value range, and near-black
+    print with a bluish cast (after lighting correction) is below it."""
     hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
     hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    return ((hue >= 95) & (hue <= 135) & (sat > 70) & (val < 210)).astype(np.uint8) * 255
+    return ((hue >= 95) & (hue <= 135) & (sat > 70) & (val > 70) & (val < 210)).astype(np.uint8) * 255
 
 
 def _pen_word(prep: Prepared, wd) -> bool:
@@ -188,10 +211,41 @@ def _detect_figures(prep: Prepared, good_boxes: list[BBox], rule_mask: np.ndarra
         if x1 - x0 < min_side or y1 - y0 < min_side or len(xs) < 0.02 * (x1 - x0) * (y1 - y0):
             continue
         pad = 4
-        boxes.append((max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)))
+        box = (max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad))
+        bx = (slice(box[1], box[3]), slice(box[0], box[2]))
+        colored_ink = np.count_nonzero(colored[bx])
+        dark_ink = np.count_nonzero(residual[bx] & ~colored[bx])
+        text_cover = np.count_nonzero(text_mask[bx]) / ((box[2] - box[0]) * (box[3] - box[1]))
+        if colored_ink and (text_cover > 0.12 or dark_ink > 1.5 * colored_ink):
+            # it grew over lines of print (words under a seal are read poorly and count as stray
+            # ink): keep only the coloured marks themselves (seal, signature) as pictures
+            boxes += _colored_parts(colored, box, k, min_side)
+        else:
+            boxes.append(box)
+    photos = _detect_photos(prep)
+    # pieces of a photo (split where it has white areas) become the one photo
+    boxes = photos + [b for b in boxes if not any(_overlap_frac(b, p) > 0.3 for p in photos)]
     area = lambda b: (b[2] - b[0]) * (b[3] - b[1])  # noqa: E731
     return [b for b in boxes if not any(o is not b and area(o) > area(b) and _overlap_frac(b, o) > 0.8
                                         for o in boxes)]
+
+
+def _colored_parts(colored: np.ndarray, box: BBox, k: int, min_side: int) -> list[BBox]:
+    """Separate seal/signature/pen marks inside `box`, from coloured ink only."""
+    x0, y0, x1, y1 = box
+    sub = colored[y0:y1, x0:x1]
+    merged = cv2.dilate(sub, np.ones((k, k), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(merged, connectivity=8)
+    out = []
+    for i in range(1, n):
+        ys, xs = np.nonzero(sub & (lab == i).astype(np.uint8) * 255)
+        if len(xs) < min_side * 4:
+            continue
+        bx0, bx1, by0, by1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+        if max(bx1 - bx0, by1 - by0) < min_side:
+            continue
+        out.append((x0 + bx0 - 4, y0 + by0 - 4, x0 + bx1 + 4, y0 + by1 + 4))
+    return out
 
 
 def _overlap_frac(inner: BBox, outer: BBox) -> float:
@@ -330,8 +384,16 @@ def _recover_missed_text(prep: Prepared, rule_mask: np.ndarray, covered: list[BB
         return [], set()
     found = _ocr_cells(prep, rule_mask, boxes, lang, gray)
     out, converted = [], set()
+    def readable(wd, tentative_box: bool) -> bool:
+        if wd.conf >= 60 and _WORDLIKE.search(wd.text):
+            return True
+        # coloured titles are often read with (near) zero confidence; they are still text when
+        # they spell a real syllable (the dictionary pass then fixes the accent)
+        core = wd.text.strip(".,;:!?")
+        return tentative_box and len(core) >= 2 and core.isalpha() and is_syllable(core)
+
     for idx, segs in found.items():
-        segs = [(ol, [wd for wd in ws if wd.conf >= 60 and _WORDLIKE.search(wd.text)]) for ol, ws in segs]
+        segs = [(ol, [wd for wd in ws if readable(wd, idx >= n_regular)]) for ol, ws in segs]
         segs = sorted((s for s in segs if s[1]), key=lambda s: s[0].baseline)
         if not segs:
             continue
@@ -345,22 +407,56 @@ def _recover_missed_text(prep: Prepared, rule_mask: np.ndarray, covered: list[BB
     return out, converted
 
 
-def _merge_into_line(blocks: list[TextBlock], extra: Line, x_size: float) -> bool:
+def _read_in_figures(prep: Prepared, figures: list[BBox], photos: list[BBox], covered: list[BBox],
+                     lang: str) -> list[TextBlock]:
+    """Printed words inside a seal/signature area (the signer's name under a seal…), which the
+    page OCR skips as picture. Only clearly read words count; the curved seal text does not."""
+    out = []
+    for f in figures:
+        if f in photos:
+            continue
+        x0, y0, x1, y1 = f
+        pars = ocr_paragraphs(cv2.copyMakeBorder(prep.gray[y0:y1, x0:x1], 20, 20, 20, 20,
+                                                 cv2.BORDER_CONSTANT, value=255), lang, psm=11,
+                              offset=(x0 - 20, y0 - 20))
+        for par in pars:
+            for ol in par.lines:
+                words = [w for w in ol.words if w.conf >= 70 and len(w.text.strip(".,;:")) >= 2
+                         and _plausible_chars(w.text) and _WORDLIKE.search(w.text)
+                         and not any(_overlap_frac(w.bbox, c) > 0.3 for c in covered)]
+                # a name or a phrase read clearly; seal lettering is curved and reads poorly
+                if len(words) >= 2 and np.mean([w.conf for w in words]) >= 80:
+                    out.append(TextBlock([_to_line((ol, words))]))
+    return out
+
+
+def _merge_into_line(blocks: list[TextBlock], extra: Line, x_size: float, max_gap: float = 4.0) -> bool:
     """Puts recovered words into the existing line they belong to (same baseline, adjacent),
     re-joining a word that OCR split in two ("b" + "ăng"). Returns True when merged."""
     ex0, _, ex1, _ = extra.bbox
     for b in blocks:
         for ln in b.lines:
-            if abs(ln.baseline - extra.baseline) > 0.5 * x_size:
+            if ln is extra or abs(ln.baseline - extra.baseline) > 0.5 * x_size:
                 continue
             lx0, _, lx1, _ = ln.bbox
-            if ex0 > lx1 + 4 * x_size or ex1 < lx0 - 4 * x_size:
+            if ex0 > lx1 + max_gap * x_size or ex1 < lx0 - max_gap * x_size:
                 continue
-            words = sorted(ln.words + extra.words, key=lambda w: w.bbox[0])
+            fresh = []
+            for w in extra.words:
+                twin = next((o for o in ln.words if w.text == o.text and abs(w.bbox[0] - o.bbox[0]) < 1.5 * x_size),
+                            None)
+                if twin is not None:  # read twice: one word covering both readings' extent
+                    twin.bbox = union([twin.bbox, w.bbox])
+                elif not any(_overlap_frac(w.bbox, o.bbox) > 0.1 for o in ln.words):
+                    fresh.append(w)
+            words = sorted(ln.words + fresh, key=lambda w: w.bbox[0])
             joined = [words[0]]
             for wd in words[1:]:
                 prev = joined[-1]
-                if wd.bbox[0] - prev.bbox[2] < 0.12 * x_size and prev.text[-1:].isalpha() and wd.text[:1].isalpha():
+                if prev.text == wd.text and wd.bbox[0] - prev.bbox[2] < 0.5 * x_size:
+                    joined[-1] = Word(prev.text, union([prev.bbox, wd.bbox]), max(prev.conf, wd.conf), prev.bold)
+                elif wd.bbox[0] - prev.bbox[2] < 0.12 * x_size and prev.text[-1:].isalpha() and wd.text[:1].isalpha() \
+                        and is_syllable((prev.text + wd.text).strip(".,;:!?")):
                     joined[-1] = Word(prev.text + wd.text, union([prev.bbox, wd.bbox]),
                                       min(prev.conf, wd.conf), prev.bold)
                 else:
@@ -411,14 +507,39 @@ def _block_color(prep: Prepared, block: TextBlock) -> tuple[float, float, float]
     return (r / 255, g / 255, b / 255)
 
 
-def _figure_crop(prep: Prepared, box: BBox) -> np.ndarray:
+def _detect_photos(prep: Prepared) -> list[BBox]:
+    """Continuous-tone pictures (portraits…) found as large smooth regions that are not paper,
+    so a picture is always one piece even where it has white areas (a shirt, a backdrop)."""
+    h, w = prep.gray.shape
+    k = 600 / max(h, w)
+    small = cv2.resize(prep.raw, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+    # lighting-corrected only: paper turns white while skin and hair keep their mid-tones
+    gray = cv2.cvtColor(flat_field(small), cv2.COLOR_BGR2GRAY)
+    lap = np.abs(cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_32F))
+    tone = ((lap < 6) & (gray < 215)).astype(np.uint8) * 255
+    tone = cv2.morphologyEx(tone, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    tone = cv2.morphologyEx(tone, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(tone, connectivity=8)
+    boxes = []
+    for i in range(1, n):
+        x, y, bw, bh, area = stats[i]
+        if area < 0.008 * gray.size or bw < 0.06 * gray.shape[1] or bh < 0.06 * gray.shape[0]:
+            continue
+        if area < 0.3 * bw * bh:
+            continue  # sparse: text blocks or ornaments, not a picture
+        if not 0.25 <= bw / bh <= 4:
+            continue  # long strips are frames and borders
+        sat = cv2.cvtColor(small[y:y + bh, x:x + bw], cv2.COLOR_BGR2HSV)[:, :, 1]
+        if float(np.median(sat)) > 70:
+            continue  # flat printed colour (a tinted band), not a photograph
+        boxes.append((int(x / k), int(y / k), int((x + bw) / k), int((y + bh) / k)))
+    return boxes
+
+
+def _figure_crop(prep: Prepared, box: BBox, is_photo: bool) -> np.ndarray:
     x0, y0, x1, y1 = box
     crop = prep.color[y0:y1, x0:x1].copy()
-    # Photos have large smooth areas that are not paper (skin, hair, backdrop); seals and
-    # signatures are thin strokes on paper.
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    lap = cv2.Laplacian(cv2.cvtColor(prep.raw[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), cv2.CV_32F)
-    if np.mean((np.abs(lap) < 8) & (gray < 225)) > 0.28:
+    if is_photo:
         return prep.raw[y0:y1, x0:x1].copy()
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     ink = (cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) < 170) | ((hsv[:, :, 1] > 80) & (hsv[:, :, 2] < 235))
@@ -450,8 +571,19 @@ def _clean_text(block: TextBlock, fix_diacritics: bool):
         words[0].text = "1"  # a lone vertical stroke in a table cell is almost always the digit
         return
     for ln in block.lines:
+        for w in ln.words:  # underline/signature strokes read as "_" or "~" around a word
+            w.text = w.text.strip("_~¯") or w.text
         ln.words = [w for w in ln.words
                     if w.text not in _NOISE and (w.conf >= 85 or _plausible_chars(w.text))]
+        # the same word read twice side by side (page OCR + a second pass) is one word
+        deduped = []
+        for w in ln.words:
+            prev = deduped[-1] if deduped else None
+            if prev is not None and prev.text == w.text and w.bbox[0] - prev.bbox[2] < 0.5 * ln.x_size:
+                deduped[-1] = Word(prev.text, union([prev.bbox, w.bbox]), max(prev.conf, w.conf), prev.bold)
+            else:
+                deduped.append(w)
+        ln.words = deduped
         # a lone dot/colon opening a line is a speck of background pattern, not punctuation
         while len(ln.words) > 1 and ln.words[0].text in {".", ",", ":", ";", "'", "`", "¡"} \
                 and ln.words[0].conf < 95:
@@ -459,11 +591,15 @@ def _clean_text(block: TextBlock, fix_diacritics: bool):
     block.lines = [ln for ln in block.lines if ln.words]
     words = [w for ln in block.lines for w in ln.words]
     alnum = sum(ch.isalnum() for w in words for ch in w.text)
+    lone_letter = len(words) == 1 and len(words[0].text) == 1 and not words[0].text.isdigit()
     if block.kind != "cell" and words and (
-            alnum == 0 or (alnum <= 2 and np.mean([w.conf for w in words]) < 85)):
+            alnum == 0 or lone_letter or (alnum <= 2 and np.mean([w.conf for w in words]) < 85)):
         block.lines = []  # isolated specks next to seals, photos and handwriting
         return
     if fix_diacritics:
+        words = [w for ln in block.lines for w in ln.words]
+        for w, t in zip(words, fix_abbreviations(fix_confusions([w.text for w in words]))):
+            w.text = t
         tokens = [w.text for ln in block.lines for w in ln.words]
         groups = iter(split_merged(tokens))
         for ln in block.lines:
@@ -471,8 +607,15 @@ def _clean_text(block: TextBlock, fix_diacritics: bool):
             for w, parts in zip(ln.words, groups):
                 new_words += _split_word(w, parts)
             ln.words = new_words
+        for ln in block.lines:  # re-join syllables OCR broke in two ("HỌ I" -> "HỘI")
+            for i in reversed(join_split([w.text for w in ln.words])):
+                a, b = ln.words[i], ln.words[i + 1]
+                ln.words[i:i + 2] = [Word(a.text + b.text, union([a.bbox, b.bbox]), min(a.conf, b.conf), a.bold)]
+            for i, word in reversed(repair_split([w.text for w in ln.words])):  # "môi n:" -> "môn:"
+                a, b = ln.words[i], ln.words[i + 1]
+                ln.words[i:i + 2] = [Word(word, union([a.bbox, b.bbox]), min(a.conf, b.conf), a.bold)]
         words = [w for ln in block.lines for w in ln.words]
-        for w, t in zip(words, correct_tokens([w.text for w in words])):
+        for w, t in zip(words, correct_tokens(fix_surnames(fix_place_names([w.text for w in words])))):
             w.text = t
 
 
@@ -532,7 +675,10 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         for ol, ws in entries:
             med_h = float(np.median([x.bbox[3] - x.bbox[1] for x in ol.words]))
             for wd in ws:
-                digits = any(ch.isdigit() for ch in wd.text)
+                # a handwritten number, not a printed reference like "1234/QĐ-SGDĐT" or a
+                # printed year followed by punctuation whose descender makes it tall ("2009;")
+                digits = any(ch.isdigit() for ch in wd.text) and sum(ch.isalpha() for ch in wd.text) <= 1 \
+                    and wd.text[-1:] not in ",;.:)"
                 unsure = (digits and wd.conf < 90) or (not _plausible_chars(wd.text) and wd.conf < 75)
                 if unsure and wd.bbox[3] - wd.bbox[1] >= 1.12 * med_h:
                     handwritten.add(id(wd))
@@ -547,8 +693,12 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         figure_boxes = _detect_figures(prep, [wd.bbox for wd in strict_good], rule_mask, tables)
         figure_boxes += [b for b in hand_boxes if not any(_overlap_frac(b, f) > 0.5 for f in figure_boxes)]
     strict_ids = {id(wd) for wd in strict_good}
+    detected_photos = _detect_photos(prep) if settings.keep_figures else []
+    photos = [f for f in figure_boxes if any(_overlap_frac(p, f) > 0.8 for p in detected_photos)]
 
     def keep(wd, ol) -> bool:
+        if any(center_in(wd.bbox, f) for f in photos):
+            return False  # "letters" found in a portrait are just shapes in the picture
         if id(wd) in handwritten or (wd.conf < 90 and _pen_word(prep, wd)):
             return False
         line_conf = float(np.median([x.conf for x in ol.words]))
@@ -606,6 +756,11 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
                                             only_in=seals, gray=no_red)
             recovered += under
 
+        done = [wd.bbox for ln in kept_lines for wd in ln.words] + \
+            [wd.bbox for b in recovered for ln in b.lines for wd in ln.words]
+        recovered += _read_in_figures(prep, [f for f in figure_boxes if f not in hand_boxes], photos, done,
+                                      settings.lang)
+
         existing = [wd.bbox for ln in kept_lines for wd in ln.words]
         for rb in recovered:
             for ln in rb.lines:
@@ -615,6 +770,14 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
                 continue
             pos = next((i for i, b in enumerate(blocks) if b.bbox[1] > rb.bbox[1]), len(blocks))
             blocks.insert(pos, rb)
+
+        # a one-line block that just continues another block's line (OCR made it a separate
+        # paragraph) joins that line; far-apart columns stay separate
+        for b in list(blocks):
+            if len(b.lines) == 1:
+                others = [o for o in blocks if o is not b]
+                if _merge_into_line(others, b.lines[0], x_size, max_gap=1.0):
+                    blocks.remove(b)
 
     fs = get_fontset("Times New Roman")
     all_blocks = blocks + [b for _, b in cell_blocks]
@@ -652,7 +815,7 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     kept_words = [(wd, b.color is not None) for b in all_blocks for ln in b.lines for wd in ln.words]
     for box in figure_boxes:
         x0, y0, x1, y1 = box
-        crop = _figure_crop(prep, box)
+        crop = _figure_crop(prep, box, box in photos)
         for wd, colored in kept_words:  # text drawn as real text must not also appear in the picture
             if box not in hand_boxes and _overlap_frac(wd.bbox, box) > 0:
                 a0, b0, a1, b1 = wd.bbox
@@ -664,14 +827,23 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
                     else:  # black text: remove only dark strokes, a seal underneath stays
                         text_ink = hsv[:, :, 2] < DARK_INK
                     sub[cv2.dilate(text_ink.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 255
-        figures.append(Figure(box, crop))
+        figures.append(Figure(box, crop, box in photos))
     rules = [r for r in rules if not any(
         center_in((int(r.x0), int(r.y0), int(r.x1), int(r.y1)), f) for f in figure_boxes)]
 
     ordered = _reading_order(blocks, cell_blocks, tables)
     page = Page(source, prep.color, ordered, rules, figures, [t.bbox for t in tables], list(prep.notes))
     page.raw = prep.raw
+    page.trim = prep.trim
     page.text_mask = _text_mask(prep, kept_words)
+    # between the words of a line only deep-black print is erased: a letter OCR left out of a
+    # word box ("c" of "chữa" read as "hữa") goes, handwriting filled into the line stays
+    gray = prep.gray
+    for b in all_blocks:
+        for ln in b.lines:
+            x0, y0, x1, y1 = ln.bbox
+            gap_ink = (gray[y0:y1, x0:x1] < 110).astype(np.uint8) * 255
+            page.text_mask[y0:y1, x0:x1] |= cv2.dilate(gap_ink, np.ones((5, 5), np.uint8))
     for x0, y0, x1, y1 in hand_boxes:  # handwriting is never erased, even under a printed word's box
         page.text_mask[y0:y1, x0:x1] = 0
     page.decorative = _is_decorative(prep, page.text_mask, figure_boxes)
@@ -681,7 +853,9 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
 def _is_decorative(prep: Prepared, text_mask: np.ndarray, figures: list[BBox]) -> bool:
     """Paper with printed colour or patterns (frames, guilloche, tinted forms), measured
     outside the text and the pictures."""
-    hsv = cv2.cvtColor(prep.color, cv2.COLOR_BGR2HSV)
+    # measured on the lighting-corrected photo: background normalisation would bleach wide
+    # colour bands (an ornamental frame) to white
+    hsv = cv2.cvtColor(flat_field(prep.raw), cv2.COLOR_BGR2HSV)
     tinted = (hsv[:, :, 1] > 40) & (hsv[:, :, 2] < 252)
     keep = text_mask == 0
     for x0, y0, x1, y1 in figures:
@@ -692,15 +866,16 @@ def _is_decorative(prep: Prepared, text_mask: np.ndarray, figures: list[BBox]) -
 def _text_mask(prep: Prepared, words) -> np.ndarray:
     """Ink of every recognised word, slightly grown, so it can be erased from the photo."""
     mask = np.zeros(prep.binary.shape, np.uint8)
-    value = cv2.cvtColor(prep.color, cv2.COLOR_BGR2HSV)[:, :, 2]
+    red = _red_mask(prep.color) > 0
     for wd, colored in words:
         x0, y0, x1, y1 = wd.bbox
-        x0, y0 = max(0, x0 - 2), max(0, y0 - 2)
-        ink = prep.binary[y0:y1 + 2, x0:x1 + 2] > 0
+        x0, y0, x1, y1 = max(0, x0 - 3), max(0, y0 - 3), x1 + 3, y1 + 3
+        # the light anti-aliased rim of each stroke too, or a ghost of the old letter shows
+        ink = prep.gray[y0:y1, x0:x1] < 205
         if not colored:  # black text over a seal: leave the seal's red ink alone
-            ink &= value[y0:y1 + 2, x0:x1 + 2] < DARK_INK + 40
-        mask[y0:y1 + 2, x0:x1 + 2][ink] = 255
-    return cv2.dilate(mask, np.ones((5, 5), np.uint8))
+            ink &= ~red[y0:y1, x0:x1]
+        mask[y0:y1, x0:x1][ink] = 255
+    return cv2.dilate(mask, np.ones((7, 7), np.uint8))
 
 
 def _reading_order(blocks: list[TextBlock], cells: list[tuple[int, TextBlock]],

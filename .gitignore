@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+dist_new/
 tests/out/
 tests/samples/
 models/dict/user_phrases.txt

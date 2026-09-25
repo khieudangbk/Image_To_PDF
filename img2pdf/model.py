@@ -91,6 +91,7 @@ class Rule:
 class Figure:
     bbox: BBox
     image: np.ndarray  # BGR crop
+    photo: bool = False  # continuous-tone picture (portrait…), kept in its real colours
 
 
 @dataclass
@@ -106,6 +107,7 @@ class Page:
     text_mask: np.ndarray | None = None  # pixels of recognised text (to erase from the background)
     background: np.ndarray | None = None  # cached `raw` with the text erased
     decorative: bool = False             # coloured/patterned paper worth keeping as background
+    trim: int = 0                        # px of paper edge (shadow, table) left out of the output
 
     @property
     def width(self) -> int:

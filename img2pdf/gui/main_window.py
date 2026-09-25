@@ -15,12 +15,12 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDockWidget, QFile
 from .. import APP_NAME, __version__
 from ..model import Page
 from ..pipeline import IMAGE_EXTS, check_language, collect_images, default_workers, process_image
-from ..render import Geometry, export_pdf, render_preview
+from ..render import export_pdf, page_geometry, render_preview
 from ..settings import Settings
 from .panels import EditorPanel, SettingsPanel
 from .views import PreviewView, SourceView, load_qimage
 
-PREVIEW_ZOOM = 2.0
+PREVIEW_ZOOM = 3.0  # rendered sharper than screen size so zooming in stays crisp
 CANCELLED = "Đã huỷ"
 
 
@@ -465,9 +465,9 @@ class MainWindow(QMainWindow):
         e = self.current()
         if e is None or e.page is None:
             return
-        g = Geometry(e.page, self.settings.paper)
-        px = (pos.x() / PREVIEW_ZOOM - g.ox) / g.s
-        py = (pos.y() / PREVIEW_ZOOM - g.oy) / g.s
+        g = page_geometry(e.page, self.settings)
+        px = (pos.x() / PREVIEW_ZOOM - g.ox) / g.sx
+        py = (pos.y() / PREVIEW_ZOOM - g.oy) / g.sy
         hits = []
         for i, b in enumerate(e.page.blocks):
             x0, y0, x1, y1 = b.container or b.bbox

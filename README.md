@@ -6,37 +6,23 @@ nhúng, chứ không phải ảnh dán vào trang.
 
 ## Tính năng
 
-- **OCR tiếng Việt** bằng Tesseract 5 với model `tessdata_best` (có thể chọn Việt + Anh).
-- **Tiền xử lý ảnh tự động**: cắt mép và nắn phẳng ảnh chụp điện thoại, khử bóng/ánh sáng không đều,
-  chỉnh nghiêng, tự xoay trang ngược/ngang, phóng ảnh độ phân giải thấp.
-- **Dựng lại bố cục**: tiêu ngữ hai cột, tiêu đề, đoạn văn căn đều, danh sách, trang nhiều cột.
-  Mỗi dòng được đặt đúng vị trí và cỡ chữ như bản gốc.
-- **Bảng có đường kẻ**: phát hiện lưới, nhận dạng từng ô riêng, vẽ lại đường kẻ dạng vector.
-- **Chữ đậm** (dựa trên độ dày nét chữ) và **tiêu đề** (thành mục lục/bookmark trong PDF).
-- **Giữ hình**: logo, con dấu đỏ, chữ ký, ảnh chân dung được giữ dạng ảnh (nén JPEG), còn lại
-  đều là văn bản. Chữ in màu (vd. tiêu đề đỏ) được giữ đúng màu; chữ đen bị con dấu đè lên vẫn
-  đọc được.
-- **Nền trang** (tab Cài đặt hoặc `--background auto|on|off`): mặc định *Tự động* — trang có hoa
-  văn/màu (chứng chỉ, bằng cấp, biểu mẫu màu) tự giữ nền gốc: ảnh gốc đã xoá chữ in làm nền
-  (hoa văn viền, nền chìm, màu giấy, con dấu, ảnh), chữ thật vẽ đè lên. Công văn giấy trắng vẫn
-  ra nền trắng sạch. Chữ OCR không chắc chắn giữ nét gốc kèm lớp chữ ẩn để vẫn tìm kiếm được.
-- **Chữ viết tay** (ngày tháng điền tay…) được nhận ra và giữ nguyên nét gốc dạng ảnh thay vì
-  đọc sai; chữ dính nhau do OCR (`SƠY TẺ`, `MinhAn`) được tách lại theo từ điển.
-- **Sửa dấu tiếng Việt theo ngữ cảnh** bằng từ điển (ví dụ `GIÁM ĐÓC → GIÁM ĐỐC`,
-  `phô thông → phổ thông`, `Chuyên đôi số → Chuyển đổi số`) nhưng không đụng tới chữ đúng
-  (`cấp tính`, `Nguyễn`, `hòa/hoà`…).
-- **Chỉnh sửa trước khi xuất**: bấm vào một vùng trên ảnh hoặc bản xem trước để sửa chữ, cỡ chữ,
-  in đậm, căn lề, loại khối; xoá vùng thừa.
-- Nhiều trang: kéo thả ảnh/thư mục, sắp xếp thứ tự, xử lý song song nhiều trang.
-- Xuất **PDF** (A4, Letter hoặc theo khổ ảnh; Times New Roman, Arial, Tahoma, Cambria, Courier New)
-  và **TXT**.
-
-Kết quả đo trên bộ ảnh mẫu (`tests/`): 98–99,6% số từ nhận đúng với ảnh scan, ảnh chụp nghiêng có
-bóng và trang hai cột.
+- **OCR tiếng Việt** bằng Tesseract 5 (có thể chọn Việt + Anh).
+- **Tự xử lý ảnh chụp**: cắt đúng phần giấy, nắn phẳng ảnh chụp nghiêng hoặc chụp chéo, tự xoay đúng
+  chiều, khử bóng và ánh sáng không đều. Giấy tờ có khung được nắn thành hình chữ nhật chuẩn.
+- **Dựng lại bố cục**: tiêu đề, đoạn văn, nhiều cột, bảng có đường kẻ, chữ đậm, chữ màu; mỗi dòng
+  được đặt đúng vị trí và cỡ chữ như bản gốc. Tiêu đề thành mục lục (bookmark) trong PDF.
+- **Giữ hình**: logo, con dấu, chữ ký, ảnh chân dung và chữ viết tay được giữ dạng ảnh.
+- **Nền trang**: tự giữ nền gốc (hoa văn, màu giấy) cho giấy tờ có trang trí, còn tài liệu thường
+  ra nền trắng sạch. Có thể chọn trong tab Cài đặt.
+- **Tự sửa lỗi OCR** bằng dữ liệu tiếng Việt: từ điển từ ghép, địa danh hành chính, chữ viết tắt,
+  họ người.
+- **Chỉnh sửa trước khi xuất**: bấm vào một vùng để sửa chữ, cỡ chữ, in đậm, căn lề, hoặc xoá vùng.
+- Nhiều trang: kéo thả ảnh/thư mục, sắp xếp thứ tự, xử lý song song.
+- Xuất **PDF** (A4, Letter hoặc theo khổ ảnh; nhiều phông chữ) và **TXT**.
 
 ## Sử dụng bản đóng gói (không cần cài Python)
 
-1. Giải nén `ImageToPDF-win64.zip`.
+1. Giải nén `ImageToPDF-win64.zip` (giữ nguyên cả thư mục).
 2. Chạy `ImageToPDF\ImageToPDF.exe`.
 3. Kéo thả ảnh vào cửa sổ → bấm **Nhận dạng** (F5) → kiểm tra/sửa → **Xuất PDF** (Ctrl+E).
 
@@ -49,17 +35,15 @@ ImageToPDF.exe --cli thu_muc_anh -o ket_qua.pdf
 ## Chạy từ mã nguồn
 
 Yêu cầu: Windows 10/11, Python 3.11+, [Tesseract 5](https://github.com/UB-Mannheim/tesseract/wiki)
-(model tiếng Việt đã có sẵn trong `models/tessdata`, không cần cài thêm gói ngôn ngữ).
+(model tiếng Việt đã có sẵn trong `models/tessdata`).
 
 ```
 pip install -r requirements.txt
 python app.py                                  # giao diện
 python cli.py anh1.jpg anh2.png -o ra.pdf      # dòng lệnh
-python cli.py thu_muc/ -o ra.pdf --font Arial --paper Letter --lang vie+eng
 ```
 
-Tuỳ chọn dòng lệnh: `--no-crop` (không tự cắt/nắn), `--no-tables`, `--no-figures`,
-`--background auto|on|off` (nền gốc: tự động / luôn giữ / nền trắng).
+Xem các tuỳ chọn dòng lệnh bằng `python cli.py --help`.
 
 ## Đóng gói
 
@@ -67,50 +51,37 @@ Tuỳ chọn dòng lệnh: `--no-crop` (không tự cắt/nắn), `--no-tables`,
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1
 ```
 
-Tạo `dist\ImageToPDF\ImageToPDF.exe` và `dist\ImageToPDF-win64.zip` (kèm Tesseract rút gọn,
-model tiếng Việt và từ điển).
+Tạo `dist\ImageToPDF\ImageToPDF.exe` và `dist\ImageToPDF-win64.zip`.
 
 ## Kiểm thử
 
-```
-python tests\make_samples.py      # tạo ảnh mẫu có đáp án (scan, ảnh chụp, hai cột)
-python tests\evaluate.py          # đo độ chính xác từng mẫu
-python tests\test_vn_correct.py   # bộ sửa dấu: các ca phải sửa và không được sửa
-python tests\test_orientation.py  # tự xoay 90/180/270°
-python tests\test_gui.py          # giao diện đầu-cuối (offscreen)
-python tests\debug_page.py anh.jpg  # xuất ảnh khung vùng + bản xem trước để soát lỗi
-```
+Các bài kiểm thử nằm trong thư mục `tests/` (độ chính xác OCR, sửa lỗi tiếng Việt, xoay/nắn ảnh,
+độ dễ đọc của PDF, giao diện). Tạo ảnh mẫu bằng `python tests\make_samples.py` rồi chạy từng file
+`tests\test_*.py` hoặc `tests\evaluate.py`.
 
 ## Cấu trúc
 
 | Thư mục/tệp | Vai trò |
 |---|---|
-| `img2pdf/preprocess.py` | Nắn phối cảnh, khử nền, chỉnh nghiêng, xoay, phóng ảnh |
-| `img2pdf/ocr.py` | Gọi Tesseract, đọc hOCR (vị trí từng từ, đường chân chữ) |
-| `img2pdf/tables.py` | Tách đường kẻ, dựng lưới bảng và ô |
-| `img2pdf/layout.py` | Ghép tất cả thành trang: khối, cột, chữ đậm, tiêu đề, hình, thứ tự đọc |
-| `img2pdf/vn_correct.py` | Sửa dấu tiếng Việt theo ngữ cảnh |
-| `img2pdf/fonts.py` | Phông TrueType, ước lượng cỡ chữ khớp độ rộng dòng gốc |
-| `img2pdf/render.py` | Vẽ PDF bằng ReportLab (chữ thật, phông nhúng, bookmark) |
-| `img2pdf/gui/` | Giao diện PyQt6 |
-| `models/tessdata` | Model Tesseract `vie`, `eng`, `osd` (tessdata_best) |
-| `models/dict` | Từ điển Viet74K, `extra_phrases.txt` (cụm hành chính), `user_phrases.txt` (tự thêm) |
+| `img2pdf/preprocess.py` | Cắt, nắn, xoay, khử nền ảnh |
+| `img2pdf/ocr.py` | Gọi Tesseract |
+| `img2pdf/tables.py` | Nhận dạng bảng |
+| `img2pdf/layout.py` | Dựng bố cục trang |
+| `img2pdf/vn_correct.py` | Sửa lỗi tiếng Việt |
+| `img2pdf/restore.py` | Cân sáng, phục hồi màu nền |
+| `img2pdf/render.py` | Vẽ PDF |
+| `img2pdf/gui/` | Giao diện |
+| `models/` | Model OCR và từ điển |
 
-Muốn bộ sửa dấu nhận thêm thuật ngữ riêng của cơ quan bạn, tạo `models/dict/user_phrases.txt`,
-mỗi dòng một cụm từ (ví dụ `sở tài nguyên và môi trường`).
+Có thể thêm thuật ngữ riêng vào `models/dict/user_phrases.txt` (mỗi dòng một cụm từ).
 
 ## Giới hạn
 
-- OCR không bao giờ đúng 100%: ảnh mờ, chữ viết tay, phông trang trí sẽ có lỗi. Hãy soát bản xem
-  trước và sửa trực tiếp trong ứng dụng trước khi xuất.
-- Bảng **không có đường kẻ** được giữ đúng vị trí dạng các khối chữ, không thành lưới ô.
-- Chữ nghiêng (italic) chưa được nhận dạng.
-- Chữ viết tay không được chuyển thành chữ gõ (Tesseract chỉ đọc chữ in); nó được giữ dạng ảnh.
-  Muốn có bản gõ thì sửa trong ứng dụng.
-- Một số cặp từ đều đúng chính tả nhưng khác nghĩa (vd. `cấp tỉnh` / `cấp tính`) không thể tự phân
-  biệt; bộ sửa dấu chọn giữ nguyên kết quả OCR trong trường hợp này.
+- OCR không bao giờ đúng 100%; hãy soát bản xem trước và sửa trong ứng dụng trước khi xuất.
+- Bảng không có đường kẻ được giữ đúng vị trí nhưng không thành lưới ô.
+- Chữ viết tay không được chuyển thành chữ gõ, chỉ giữ dạng ảnh.
 
 ## Giấy phép thành phần
 
-Tesseract OCR và tessdata (Apache 2.0), Viet74K (duyet/vietnamese-wordlist), ReportLab (BSD),
-PyMuPDF (AGPL), Qt/PyQt6 (GPL), OpenCV (Apache 2.0).
+Tesseract OCR (Apache 2.0), Viet74K (duyet/vietnamese-wordlist), dvhcvn (daohoangson/dvhcvn),
+ReportLab (BSD), PyMuPDF (AGPL), Qt/PyQt6 (GPL), OpenCV (Apache 2.0).
