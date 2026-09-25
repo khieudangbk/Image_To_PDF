@@ -1,0 +1,84 @@
+# Cụm từ hành chính / giáo dục thường gặp, bổ sung cho Viet74K.
+# Mỗi dòng một cụm; có thể thêm cụm riêng vào user_phrases.txt.
+cấp tỉnh
+cấp huyện
+cấp xã
+cấp trường
+cấp quốc gia
+cấp thành phố
+cấp bộ
+cấp cơ sở
+ubnd tỉnh
+ubnd huyện
+ubnd xã
+ubnd thành phố
+ủy ban nhân dân tỉnh
+ủy ban nhân dân huyện
+ủy ban nhân dân xã
+uỷ ban nhân dân
+hội đồng nhân dân tỉnh
+sở giáo dục
+sở giáo dục và đào tạo
+sở y tế
+sở tài chính
+sở nội vụ
+sở tư pháp
+sở xây dựng
+sở công thương
+sở kế hoạch và đầu tư
+sở tài nguyên và môi trường
+sở lao động
+sở văn hóa
+sở giao thông vận tải
+sở thông tin và truyền thông
+sở khoa học và công nghệ
+sở nông nghiệp
+phòng giáo dục
+phòng giáo dục và đào tạo
+bộ giáo dục và đào tạo
+giám đốc sở
+phó giám đốc sở
+chánh văn phòng
+chánh thanh tra
+trưởng phòng
+phó trưởng phòng
+hiệu trưởng
+phó hiệu trưởng
+chủ tịch ubnd
+phó chủ tịch ubnd
+chủ tịch ủy ban nhân dân
+trung học phổ thông
+trung học cơ sở
+học sinh giỏi
+cộng hòa xã hội chủ nghĩa việt nam
+cộng hoà xã hội chủ nghĩa việt nam
+độc lập tự do hạnh phúc
+nơi nhận
+lưu vt
+quyết định
+thông tư
+nghị định
+công văn
+tờ trình
+kế hoạch
+thông báo
+báo cáo
+biên bản
+căn cứ
+theo đề nghị
+có hiệu lực
+kể từ ngày
+bãi bỏ
+thi hành
+chịu trách nhiệm
+năm học
+học kỳ
+kỳ thi
+tỉnh ủy
+huyện ủy
+thành ủy
+ban chấp hành
+bí thư
+giám đốc
+phó giám đốc
+tổng giám đốc

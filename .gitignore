@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+build/
+dist/
+tests/out/
+tests/samples/
+models/dict/user_phrases.txt
