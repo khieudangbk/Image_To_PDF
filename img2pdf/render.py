@@ -154,7 +154,8 @@ def draw_page(c, page: Page, settings: Settings, page_no: int):
     c.setPageSize((g.pw, g.ph))
     c.setFont(fs.regular, 12)  # otherwise ReportLab references its default Helvetica
 
-    on_background = settings.keep_background and page.raw is not None
+    on_background = page.raw is not None and (
+        settings.background == "on" or (settings.background == "auto" and page.decorative))
     if on_background:
         # The original page with its printed text erased already holds the colours, frames,
         # seals, photos and lines; only the real text is drawn on top.

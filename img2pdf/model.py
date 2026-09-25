@@ -105,6 +105,7 @@ class Page:
     raw: np.ndarray | None = None        # original colours, same geometry as `image`
     text_mask: np.ndarray | None = None  # pixels of recognised text (to erase from the background)
     background: np.ndarray | None = None  # cached `raw` with the text erased
+    decorative: bool = False             # coloured/patterned paper worth keeping as background
 
     @property
     def width(self) -> int:

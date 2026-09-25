@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, 
 from ..fonts import FAMILIES, fit_font_px, get_fontset
 from ..model import Page, TextBlock
 from ..render import Geometry
-from ..settings import LANGUAGES, PAPERS, Settings
+from ..settings import BACKGROUNDS, LANGUAGES, PAPERS, Settings
 
 KIND_NAMES = {"paragraph": "Đoạn văn", "heading": "Tiêu đề", "cell": "Ô bảng", "figure": "Hình ảnh"}
 ALIGNS = [("left", "Trái"), ("center", "Giữa"), ("right", "Phải"), ("justify", "Đều hai bên")]
@@ -175,9 +175,11 @@ class SettingsPanel(QWidget):
         self.font.addItems(list(FAMILIES))
         self.paper = QComboBox()
         self.paper.addItems(PAPERS)
-        self.background = QCheckBox("Giữ nền và màu gốc (hoa văn, con dấu, ảnh)")
-        self.background.setToolTip("Dùng ảnh gốc đã xoá chữ làm nền, chữ thật vẽ đè lên.\n"
-                                   "Giống bản gốc hơn nhưng file PDF nặng hơn.")
+        self.background = QComboBox()
+        for name, code in BACKGROUNDS.items():
+            self.background.addItem(name, code)
+        self.background.setToolTip("Giữ nền: dùng ảnh gốc đã xoá chữ làm nền (hoa văn, màu giấy, con dấu,\n"
+                                   "chữ viết tay) rồi vẽ chữ thật đè lên. Giống bản gốc hơn, file nặng hơn.")
         self.auto_crop = QCheckBox("Tự cắt mép và nắn phẳng ảnh chụp")
         self.tables = QCheckBox("Nhận dạng bảng có đường kẻ")
         self.figures = QCheckBox("Giữ hình ảnh (logo, con dấu, chữ ký)")
@@ -194,7 +196,7 @@ class SettingsPanel(QWidget):
         f2 = QFormLayout(pdf_box)
         f2.addRow("Phông chữ:", self.font)
         f2.addRow("Khổ giấy:", self.paper)
-        f2.addRow(self.background)
+        f2.addRow("Nền trang:", self.background)
 
         lay = QVBoxLayout(self)
         lay.addWidget(ocr_box)
@@ -208,7 +210,7 @@ class SettingsPanel(QWidget):
             w.toggled.connect(self._ocr)
         self.font.currentIndexChanged.connect(self._render)
         self.paper.currentIndexChanged.connect(self._render)
-        self.background.toggled.connect(self._render)
+        self.background.currentIndexChanged.connect(self._render)
 
     def load(self):
         s = self.settings
@@ -219,7 +221,7 @@ class SettingsPanel(QWidget):
         self.tables.setChecked(s.detect_tables)
         self.figures.setChecked(s.keep_figures)
         self.diacritics.setChecked(s.fix_diacritics)
-        self.background.setChecked(s.keep_background)
+        self.background.setCurrentIndex(max(0, self.background.findData(s.background)))
 
     def _ocr(self):
         s = self.settings
@@ -233,5 +235,5 @@ class SettingsPanel(QWidget):
     def _render(self):
         self.settings.font = self.font.currentText()
         self.settings.paper = self.paper.currentText()
-        self.settings.keep_background = self.background.isChecked()
+        self.settings.background = self.background.currentData()
         self.renderChanged.emit()

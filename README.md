@@ -16,10 +16,12 @@ nhúng, chứ không phải ảnh dán vào trang.
 - **Giữ hình**: logo, con dấu đỏ, chữ ký, ảnh chân dung được giữ dạng ảnh (nén JPEG), còn lại
   đều là văn bản. Chữ in màu (vd. tiêu đề đỏ) được giữ đúng màu; chữ đen bị con dấu đè lên vẫn
   đọc được.
-- **Giữ nền và màu gốc** (tuỳ chọn, tab Cài đặt hoặc `--keep-background`): dùng ảnh gốc đã xoá
-  chữ in làm nền — giữ nguyên hoa văn viền, nền chìm, màu giấy, con dấu — rồi vẽ chữ thật đè lên.
-  Chữ nào OCR không chắc chắn thì giữ nguyên nét gốc và chỉ đặt lớp chữ ẩn để vẫn tìm kiếm được.
-  Hợp với chứng chỉ, bằng cấp, giấy tờ có nền trang trí; file nặng hơn (~0,5 MB/trang).
+- **Nền trang** (tab Cài đặt hoặc `--background auto|on|off`): mặc định *Tự động* — trang có hoa
+  văn/màu (chứng chỉ, bằng cấp, biểu mẫu màu) tự giữ nền gốc: ảnh gốc đã xoá chữ in làm nền
+  (hoa văn viền, nền chìm, màu giấy, con dấu, ảnh), chữ thật vẽ đè lên. Công văn giấy trắng vẫn
+  ra nền trắng sạch. Chữ OCR không chắc chắn giữ nét gốc kèm lớp chữ ẩn để vẫn tìm kiếm được.
+- **Chữ viết tay** (ngày tháng điền tay…) được nhận ra và giữ nguyên nét gốc dạng ảnh thay vì
+  đọc sai; chữ dính nhau do OCR (`SƠY TẺ`, `MinhAn`) được tách lại theo từ điển.
 - **Sửa dấu tiếng Việt theo ngữ cảnh** bằng từ điển (ví dụ `GIÁM ĐÓC → GIÁM ĐỐC`,
   `phô thông → phổ thông`, `Chuyên đôi số → Chuyển đổi số`) nhưng không đụng tới chữ đúng
   (`cấp tính`, `Nguyễn`, `hòa/hoà`…).
@@ -57,7 +59,7 @@ python cli.py thu_muc/ -o ra.pdf --font Arial --paper Letter --lang vie+eng
 ```
 
 Tuỳ chọn dòng lệnh: `--no-crop` (không tự cắt/nắn), `--no-tables`, `--no-figures`,
-`--keep-background` (giữ nền và màu gốc).
+`--background auto|on|off` (nền gốc: tự động / luôn giữ / nền trắng).
 
 ## Đóng gói
 
@@ -103,8 +105,8 @@ mỗi dòng một cụm từ (ví dụ `sở tài nguyên và môi trường`).
   trước và sửa trực tiếp trong ứng dụng trước khi xuất.
 - Bảng **không có đường kẻ** được giữ đúng vị trí dạng các khối chữ, không thành lưới ô.
 - Chữ nghiêng (italic) chưa được nhận dạng.
-- Chữ viết tay (ngày tháng điền tay…) thường bị đọc sai; hãy sửa trong ứng dụng hoặc bật
-  "Giữ nền và màu gốc".
+- Chữ viết tay không được chuyển thành chữ gõ (Tesseract chỉ đọc chữ in); nó được giữ dạng ảnh.
+  Muốn có bản gõ thì sửa trong ứng dụng.
 - Một số cặp từ đều đúng chính tả nhưng khác nghĩa (vd. `cấp tỉnh` / `cấp tính`) không thể tự phân
   biệt; bộ sửa dấu chọn giữ nguyên kết quả OCR trong trường hợp này.
 

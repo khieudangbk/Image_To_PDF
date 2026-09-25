@@ -142,17 +142,19 @@ def correct_tokens(tokens: list[str]) -> list[str]:
         out[i] = pre + _match_case(orig, word) + post
         low[i] = word
 
-    for i in range(n):
-        if not suspicious(i):
-            continue
-        scored = []
-        for c in variants(i):
-            size, domain = evidence(i, c)
-            if size and (domain or plausible(low[i], c)):
-                scored.append((size, domain, -_diff(low[i], c), c))
-        scored.sort(reverse=True)
-        if scored and not (len(scored) > 1 and scored[0][:3] == scored[1][:3]):
-            replace(i, scored[0][3])
+    # Two rounds: fixing one syllable can supply the context another one needs ("SƠ Y TẺ").
+    for _ in range(2):
+        for i in range(n):
+            if not suspicious(i):
+                continue
+            scored = []
+            for c in variants(i):
+                size, domain = evidence(i, c)
+                if size and (domain or plausible(low[i], c)):
+                    scored.append((size, domain, -_diff(low[i], c), c))
+            scored.sort(reverse=True)
+            if scored and not (len(scored) > 1 and scored[0][:3] == scored[1][:3]):
+                replace(i, scored[0][3])
 
     # Two neighbouring syllables both misread (e.g. "chuyên đôi" -> "chuyển đổi").
     for i in range(n - 1):
@@ -175,4 +177,49 @@ def correct_tokens(tokens: list[str]) -> list[str]:
         if pairs and not (len(pairs) > 1 and pairs[0][:2] == pairs[1][:2]):
             replace(i, pairs[0][2])
             replace(i + 1, pairs[0][3])
+    return out
+
+
+_CAMEL = re.compile(r"(?<=[a-zà-ỹđ])(?=[A-ZÀ-ỸĐ])")
+
+
+def split_merged(tokens: list[str]) -> list[list[str]]:
+    """Splits tokens where OCR glued two syllables together ("SƠY" -> "SƠ Y", "MinhAn" ->
+    "Minh An"). A token is split only if it is not itself a syllable and exactly one split
+    point yields two syllables that form a known phrase with each other or a neighbour."""
+    lex = lexicon()
+    if not lex.phrases:
+        return [[t] for t in tokens]
+    cores = [_SPLIT.match(t).groups() for t in tokens]
+
+    def forms(word: str) -> set[str]:
+        return lex.index.get(skeleton(word), set()) | {canonical(word)}
+
+    out = []
+    for i, (pre, core, post) in enumerate(cores):
+        if not core.isalpha() or len(core) < 3 or lex.count.get(canonical(core), 0) > 0 \
+                or canonical(core) in _SURNAMES:
+            out.append([tokens[i]])
+            continue
+        camel = [p for p in _CAMEL.split(core) if p]
+        if len(camel) == 2 and all(skeleton(p) in lex.index for p in camel):
+            out.append([pre + camel[0], camel[1] + post])
+            continue
+        prev = forms(cores[i - 1][1]) if i > 0 and cores[i - 1][1].isalpha() else set()
+        nxt = forms(cores[i + 1][1]) if i + 1 < len(cores) and cores[i + 1][1].isalpha() else set()
+        splits = []
+        for k in range(1, len(core)):
+            a, b = core[:k], core[k:]
+            if skeleton(a) not in lex.index or skeleton(b) not in lex.index:
+                continue
+            va, vb = lex.index[skeleton(a)], lex.index[skeleton(b)]
+            if any(lex.has(x, y) for x in va for y in vb) or \
+                    any(lex.has(y, z) for y in vb for z in nxt) or \
+                    any(lex.has(z, x) for z in prev for x in va):
+                splits.append(k)
+        if len(splits) == 1:
+            k = splits[0]
+            out.append([pre + core[:k], core[k:] + post])
+        else:
+            out.append([tokens[i]])
     return out

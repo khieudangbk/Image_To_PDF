@@ -11,7 +11,7 @@ from .ocr import OLine, OPar, ocr_paragraphs
 from .preprocess import Prepared
 from .settings import Settings
 from .tables import TableGrid, detect_rules, detect_tables
-from .vn_correct import correct_tokens
+from .vn_correct import correct_tokens, split_merged
 
 _WORDLIKE = re.compile(r"\w", re.UNICODE)
 DARK_INK = 110  # HSV value below which a pixel is printed black ink rather than seal ink
@@ -461,9 +461,31 @@ def _clean_text(block: TextBlock, fix_diacritics: bool):
         block.lines = []  # isolated specks next to seals, photos and handwriting
         return
     if fix_diacritics:
+        tokens = [w.text for ln in block.lines for w in ln.words]
+        groups = iter(split_merged(tokens))
+        for ln in block.lines:
+            new_words = []
+            for w, parts in zip(ln.words, groups):
+                new_words += _split_word(w, parts)
+            ln.words = new_words
         words = [w for ln in block.lines for w in ln.words]
         for w, t in zip(words, correct_tokens([w.text for w in words])):
             w.text = t
+
+
+def _split_word(w: Word, parts: list[str]) -> list[Word]:
+    """Divides a word box among its parts in proportion to their length, leaving a space-sized gap."""
+    if len(parts) == 1:
+        return [w]
+    x0, y0, x1, y1 = w.bbox
+    total = sum(len(p) for p in parts) + 0.6 * (len(parts) - 1)
+    unit = (x1 - x0) / total
+    out, x = [], float(x0)
+    for p in parts:
+        width = len(p) * unit
+        out.append(Word(p, (int(x), y0, int(x + width), y1), w.conf, w.bold))
+        x += width + 0.6 * unit
+    return out
 
 
 # ---------------------------------------------------------------- page assembly
@@ -500,14 +522,31 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         if entries:
             par_entries.append(entries)
 
+    # Handwriting filled into a printed line (e.g. the date): OCR is unsure of it and it is
+    # taller than the print around it. It is kept as a picture rather than read wrongly.
+    handwritten, hand_boxes = set(), []
+    for entries in par_entries:
+        for ol, ws in entries:
+            med_h = float(np.median([x.bbox[3] - x.bbox[1] for x in ol.words]))
+            for wd in ws:
+                digits = any(ch.isdigit() for ch in wd.text)
+                unsure = (digits and wd.conf < 90) or (not _plausible_chars(wd.text) and wd.conf < 75)
+                if unsure and wd.bbox[3] - wd.bbox[1] >= 1.12 * med_h:
+                    handwritten.add(id(wd))
+                    p = max(4, int(0.15 * med_h))
+                    x0, y0, x1, y1 = wd.bbox
+                    hand_boxes.append((max(0, x0 - p), max(0, y0 - p), min(w, x1 + p), min(h, y1 + p)))
+
     figure_boxes: list[BBox] = []
-    strict_good = [wd for entries in par_entries for _, ws in entries for wd in ws if _is_good_word(wd, True)]
+    strict_good = [wd for entries in par_entries for _, ws in entries for wd in ws
+                   if _is_good_word(wd, True) and id(wd) not in handwritten]
     if settings.keep_figures:
         figure_boxes = _detect_figures(prep, [wd.bbox for wd in strict_good], rule_mask, tables)
+        figure_boxes += [b for b in hand_boxes if not any(_overlap_frac(b, f) > 0.5 for f in figure_boxes)]
     strict_ids = {id(wd) for wd in strict_good}
 
     def keep(wd, ol) -> bool:
-        if wd.conf < 90 and _pen_word(prep, wd):
+        if id(wd) in handwritten or (wd.conf < 90 and _pen_word(prep, wd)):
             return False
         line_conf = float(np.median([x.conf for x in ol.words]))
         in_figure = any(center_in(wd.bbox, f) for f in figure_boxes)
@@ -540,7 +579,7 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     kept_lines = [ln for b in blocks + [b for _, b in cell_blocks] for ln in b.lines]
     if kept_lines:
         x_size = float(np.median([ln.x_size for ln in kept_lines]))
-        tentative_idx = [i for i, f in enumerate(figure_boxes) if _text_shaped(f, x_size)]
+        tentative_idx = [i for i, f in enumerate(figure_boxes) if _text_shaped(f, x_size) and f not in hand_boxes]
         solid = [f for i, f in enumerate(figure_boxes) if i not in tentative_idx]
         covered = [wd.bbox for ln in kept_lines for wd in ln.words] + figure_boxes + all_cells
         recovered, converted = _recover_missed_text(prep, rule_mask, covered, x_size, settings.lang,
@@ -612,7 +651,7 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         x0, y0, x1, y1 = box
         crop = _figure_crop(prep, box)
         for wd, colored in kept_words:  # text drawn as real text must not also appear in the picture
-            if _overlap_frac(wd.bbox, box) > 0:
+            if box not in hand_boxes and _overlap_frac(wd.bbox, box) > 0:
                 a0, b0, a1, b1 = wd.bbox
                 sub = crop[max(0, b0 - y0 - 2):max(0, b1 - y0 + 2), max(0, a0 - x0 - 2):max(0, a1 - x0 + 2)]
                 if sub.size:
@@ -630,7 +669,21 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     page = Page(source, prep.color, ordered, rules, figures, [t.bbox for t in tables], list(prep.notes))
     page.raw = prep.raw
     page.text_mask = _text_mask(prep, kept_words)
+    for x0, y0, x1, y1 in hand_boxes:  # handwriting is never erased, even under a printed word's box
+        page.text_mask[y0:y1, x0:x1] = 0
+    page.decorative = _is_decorative(prep, page.text_mask, figure_boxes)
     return page
+
+
+def _is_decorative(prep: Prepared, text_mask: np.ndarray, figures: list[BBox]) -> bool:
+    """Paper with printed colour or patterns (frames, guilloche, tinted forms), measured
+    outside the text and the pictures."""
+    hsv = cv2.cvtColor(prep.color, cv2.COLOR_BGR2HSV)
+    tinted = (hsv[:, :, 1] > 40) & (hsv[:, :, 2] < 252)
+    keep = text_mask == 0
+    for x0, y0, x1, y1 in figures:
+        keep[y0:y1, x0:x1] = False
+    return float(tinted[keep].mean()) > 0.06 if keep.any() else False
 
 
 def _text_mask(prep: Prepared, words) -> np.ndarray:

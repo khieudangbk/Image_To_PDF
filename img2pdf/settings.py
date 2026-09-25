@@ -5,6 +5,8 @@ LANGUAGES = {
     "Tiếng Việt + Tiếng Anh": "vie+eng",
     "Tiếng Anh": "eng",
 }
+BACKGROUNDS = {"Tự động (giữ nền nếu có hoa văn/màu)": "auto", "Giữ nền và màu gốc": "on",
+               "Nền trắng": "off"}
 PAPER_FIT_IMAGE = "Theo ảnh"
 PAPERS = ["A4", "Letter", PAPER_FIT_IMAGE]
 
@@ -18,7 +20,9 @@ class Settings:
     detect_tables: bool = True
     keep_figures: bool = True
     fix_diacritics: bool = True
-    keep_background: bool = False  # draw the original page (text erased) behind the real text
+    # Original page (text erased) behind the real text: "auto" = only for decorated pages
+    # (certificates, coloured forms), "on" = always, "off" = clean white page.
+    background: str = "auto"
 
     def ocr_key(self) -> tuple:
         return (self.lang, self.auto_crop, self.detect_tables, self.keep_figures, self.fix_diacritics)
