@@ -102,6 +102,9 @@ class Page:
     figures: list[Figure] = field(default_factory=list)
     tables: list[BBox] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    raw: np.ndarray | None = None        # original colours, same geometry as `image`
+    text_mask: np.ndarray | None = None  # pixels of recognised text (to erase from the background)
+    background: np.ndarray | None = None  # cached `raw` with the text erased
 
     @property
     def width(self) -> int:

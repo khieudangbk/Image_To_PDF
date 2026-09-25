@@ -17,6 +17,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-crop", action="store_true", help="Không tự cắt/nắn phối cảnh")
     ap.add_argument("--no-tables", action="store_true", help="Không nhận dạng bảng")
     ap.add_argument("--no-figures", action="store_true", help="Không giữ hình (logo, con dấu, chữ ký)")
+    ap.add_argument("--keep-background", action="store_true",
+                    help="Giữ nền và màu gốc (hoa văn, con dấu, ảnh) phía sau chữ thật")
     a = ap.parse_args(argv)
 
     files = collect_images(a.inputs)
@@ -24,7 +26,8 @@ def main(argv=None) -> int:
         print("Không tìm thấy ảnh hợp lệ.", file=sys.stderr)
         return 2
     s = Settings(lang=a.lang, font=a.font, paper=a.paper, auto_crop=not a.no_crop,
-                 detect_tables=not a.no_tables, keep_figures=not a.no_figures)
+                 detect_tables=not a.no_tables, keep_figures=not a.no_figures,
+                 keep_background=a.keep_background)
     t0 = time.time()
 
     def report(i, page, err):

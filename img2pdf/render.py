@@ -44,7 +44,7 @@ class Geometry:
         return self.ph - (self.oy + py * self.s)
 
 
-def _draw_exact(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float):
+def _draw_exact(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float, on_background: bool = False):
     size_pt = size_px * g.s
     text = c.beginText()
     for ln in block.lines:
@@ -64,6 +64,8 @@ def _draw_exact(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float):
             text.setTextOrigin(g.x(w.bbox[0]), yb)
             text.setFont(fs.name(w.bold), size_pt)
             text.setHorizScale(hscale)
+            # 3 = invisible: the original pixels stay visible, the text is still searchable
+            text.setTextRenderMode(3 if on_background and _show_original(block, w) else 0)
             text.textOut(w.text + (" " if i + 1 < len(words) else ""))
     c.drawText(text)
 
@@ -108,13 +110,40 @@ def _draw_flow(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float):
     p.drawOn(c, g.x(x0), g.y(top) - ph + (style.leading - ascent) * 0.5)
 
 
-def _jpeg(bgr: np.ndarray, width_pt: float, dpi: int = 220) -> io.BytesIO:
+LOW_CONF = 80  # with the original background, words OCR is unsure of keep their original pixels
+
+
+def _show_original(block: TextBlock, w) -> bool:
+    return block.override_text is None and w.conf < LOW_CONF
+
+
+def background(page: Page) -> np.ndarray:
+    """Original page colours with the recognised text painted out (computed once per page)."""
+    if page.background is None:
+        raw, mask = page.raw, page.text_mask.copy()
+        for b in page.blocks:
+            for ln in b.lines:
+                for w in ln.words:
+                    if _show_original(b, w):
+                        x0, y0, x1, y1 = w.bbox
+                        mask[y0:y1, x0:x1] = 0
+        k = min(1.0, 1800 / raw.shape[1])  # inpainting cost grows fast with size
+        if k < 1:
+            small = cv2.resize(raw, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+            small_mask = cv2.resize(mask, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_NEAREST)
+        else:
+            small, small_mask = raw, mask
+        page.background = cv2.inpaint(small, small_mask, 4, cv2.INPAINT_TELEA)
+    return page.background
+
+
+def _jpeg(bgr: np.ndarray, width_pt: float, dpi: int = 220, quality: int = 88) -> io.BytesIO:
     max_w = max(1, int(width_pt / 72 * dpi))
     if bgr.shape[1] > max_w:
         bgr = cv2.resize(bgr, (max_w, max(1, int(bgr.shape[0] * max_w / bgr.shape[1]))),
                          interpolation=cv2.INTER_AREA)
     buf = io.BytesIO()
-    Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).save(buf, "JPEG", quality=88, optimize=True)
+    Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).save(buf, "JPEG", quality=quality, optimize=True)
     buf.seek(0)
     return buf
 
@@ -125,15 +154,21 @@ def draw_page(c, page: Page, settings: Settings, page_no: int):
     c.setPageSize((g.pw, g.ph))
     c.setFont(fs.regular, 12)  # otherwise ReportLab references its default Helvetica
 
-    for fig in page.figures:
-        x0, y0, x1, y1 = fig.bbox
-        c.drawImage(ImageReader(_jpeg(fig.image, (x1 - x0) * g.s)), g.x(x0), g.y(y1),
-                    width=(x1 - x0) * g.s, height=(y1 - y0) * g.s)
-
-    c.setStrokeColorRGB(0, 0, 0)
-    for r in page.rules:
-        c.setLineWidth(max(0.4, r.thickness * g.s))
-        c.line(g.x(r.x0), g.y(r.y0), g.x(r.x1), g.y(r.y1))
+    on_background = settings.keep_background and page.raw is not None
+    if on_background:
+        # The original page with its printed text erased already holds the colours, frames,
+        # seals, photos and lines; only the real text is drawn on top.
+        c.drawImage(ImageReader(_jpeg(background(page), page.width * g.s, dpi=200, quality=82)),
+                    g.x(0), g.y(page.height), width=page.width * g.s, height=page.height * g.s)
+    else:
+        for fig in page.figures:
+            x0, y0, x1, y1 = fig.bbox
+            c.drawImage(ImageReader(_jpeg(fig.image, (x1 - x0) * g.s)), g.x(x0), g.y(y1),
+                        width=(x1 - x0) * g.s, height=(y1 - y0) * g.s)
+        c.setStrokeColorRGB(0, 0, 0)
+        for r in page.rules:
+            c.setLineWidth(max(0.4, r.thickness * g.s))
+            c.line(g.x(r.x0), g.y(r.y0), g.x(r.x1), g.y(r.y1))
 
     for i, block in enumerate(page.blocks):
         if not block.text.strip():
@@ -143,7 +178,7 @@ def draw_page(c, page: Page, settings: Settings, page_no: int):
         if block.override_text is not None:
             _draw_flow(c, block, fs, g, size_px)
         else:
-            _draw_exact(c, block, fs, g, size_px)
+            _draw_exact(c, block, fs, g, size_px, on_background)
         if block.kind == "heading":
             key = f"p{page_no}b{i}"
             c.bookmarkPage(key, fit="XYZ", top=g.y(block.bbox[1]) + 4, left=0)

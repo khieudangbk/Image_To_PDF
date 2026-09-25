@@ -13,7 +13,13 @@ nhúng, chứ không phải ảnh dán vào trang.
   Mỗi dòng được đặt đúng vị trí và cỡ chữ như bản gốc.
 - **Bảng có đường kẻ**: phát hiện lưới, nhận dạng từng ô riêng, vẽ lại đường kẻ dạng vector.
 - **Chữ đậm** (dựa trên độ dày nét chữ) và **tiêu đề** (thành mục lục/bookmark trong PDF).
-- **Giữ hình**: logo, con dấu đỏ, chữ ký được giữ dạng ảnh (nén JPEG), còn lại đều là văn bản.
+- **Giữ hình**: logo, con dấu đỏ, chữ ký, ảnh chân dung được giữ dạng ảnh (nén JPEG), còn lại
+  đều là văn bản. Chữ in màu (vd. tiêu đề đỏ) được giữ đúng màu; chữ đen bị con dấu đè lên vẫn
+  đọc được.
+- **Giữ nền và màu gốc** (tuỳ chọn, tab Cài đặt hoặc `--keep-background`): dùng ảnh gốc đã xoá
+  chữ in làm nền — giữ nguyên hoa văn viền, nền chìm, màu giấy, con dấu — rồi vẽ chữ thật đè lên.
+  Chữ nào OCR không chắc chắn thì giữ nguyên nét gốc và chỉ đặt lớp chữ ẩn để vẫn tìm kiếm được.
+  Hợp với chứng chỉ, bằng cấp, giấy tờ có nền trang trí; file nặng hơn (~0,5 MB/trang).
 - **Sửa dấu tiếng Việt theo ngữ cảnh** bằng từ điển (ví dụ `GIÁM ĐÓC → GIÁM ĐỐC`,
   `phô thông → phổ thông`, `Chuyên đôi số → Chuyển đổi số`) nhưng không đụng tới chữ đúng
   (`cấp tính`, `Nguyễn`, `hòa/hoà`…).
@@ -50,7 +56,8 @@ python cli.py anh1.jpg anh2.png -o ra.pdf      # dòng lệnh
 python cli.py thu_muc/ -o ra.pdf --font Arial --paper Letter --lang vie+eng
 ```
 
-Tuỳ chọn dòng lệnh: `--no-crop` (không tự cắt/nắn), `--no-tables`, `--no-figures`.
+Tuỳ chọn dòng lệnh: `--no-crop` (không tự cắt/nắn), `--no-tables`, `--no-figures`,
+`--keep-background` (giữ nền và màu gốc).
 
 ## Đóng gói
 
@@ -95,7 +102,9 @@ mỗi dòng một cụm từ (ví dụ `sở tài nguyên và môi trường`).
 - OCR không bao giờ đúng 100%: ảnh mờ, chữ viết tay, phông trang trí sẽ có lỗi. Hãy soát bản xem
   trước và sửa trực tiếp trong ứng dụng trước khi xuất.
 - Bảng **không có đường kẻ** được giữ đúng vị trí dạng các khối chữ, không thành lưới ô.
-- Chữ nghiêng (italic) và màu chữ chưa được nhận dạng; mọi chữ xuất ra màu đen.
+- Chữ nghiêng (italic) chưa được nhận dạng.
+- Chữ viết tay (ngày tháng điền tay…) thường bị đọc sai; hãy sửa trong ứng dụng hoặc bật
+  "Giữ nền và màu gốc".
 - Một số cặp từ đều đúng chính tả nhưng khác nghĩa (vd. `cấp tỉnh` / `cấp tính`) không thể tự phân
   biệt; bộ sửa dấu chọn giữ nguyên kết quả OCR trong trường hợp này.
 

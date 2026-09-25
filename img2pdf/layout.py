@@ -627,7 +627,24 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         center_in((int(r.x0), int(r.y0), int(r.x1), int(r.y1)), f) for f in figure_boxes)]
 
     ordered = _reading_order(blocks, cell_blocks, tables)
-    return Page(source, prep.color, ordered, rules, figures, [t.bbox for t in tables], list(prep.notes))
+    page = Page(source, prep.color, ordered, rules, figures, [t.bbox for t in tables], list(prep.notes))
+    page.raw = prep.raw
+    page.text_mask = _text_mask(prep, kept_words)
+    return page
+
+
+def _text_mask(prep: Prepared, words) -> np.ndarray:
+    """Ink of every recognised word, slightly grown, so it can be erased from the photo."""
+    mask = np.zeros(prep.binary.shape, np.uint8)
+    value = cv2.cvtColor(prep.color, cv2.COLOR_BGR2HSV)[:, :, 2]
+    for wd, colored in words:
+        x0, y0, x1, y1 = wd.bbox
+        x0, y0 = max(0, x0 - 2), max(0, y0 - 2)
+        ink = prep.binary[y0:y1 + 2, x0:x1 + 2] > 0
+        if not colored:  # black text over a seal: leave the seal's red ink alone
+            ink &= value[y0:y1 + 2, x0:x1 + 2] < DARK_INK + 40
+        mask[y0:y1 + 2, x0:x1 + 2][ink] = 255
+    return cv2.dilate(mask, np.ones((5, 5), np.uint8))
 
 
 def _reading_order(blocks: list[TextBlock], cells: list[tuple[int, TextBlock]],

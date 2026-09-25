@@ -18,6 +18,7 @@ class Settings:
     detect_tables: bool = True
     keep_figures: bool = True
     fix_diacritics: bool = True
+    keep_background: bool = False  # draw the original page (text erased) behind the real text
 
     def ocr_key(self) -> tuple:
         return (self.lang, self.auto_crop, self.detect_tables, self.keep_figures, self.fix_diacritics)

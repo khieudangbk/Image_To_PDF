@@ -133,6 +133,7 @@ class EditorPanel(QWidget):
             block.set_bold(self.bold.isChecked())
         if block.kind != "cell":
             block.kind = self.kind.currentData()
+        self.page.background = None  # edited text must be erased from the original background
         self.changed.emit()
         self.set_target(self.page, self.key, self.settings)
 
@@ -142,6 +143,7 @@ class EditorPanel(QWidget):
             return
         block.override_text = None
         block.font_px_override = None
+        self.page.background = None
         self.changed.emit()
         self.set_target(self.page, self.key, self.settings)
 
@@ -149,6 +151,7 @@ class EditorPanel(QWidget):
         if self.page is None or self.key is None:
             return
         kind, idx = self.key
+        self.page.background = None
         if kind == "block":
             del self.page.blocks[idx]
         else:
@@ -172,6 +175,9 @@ class SettingsPanel(QWidget):
         self.font.addItems(list(FAMILIES))
         self.paper = QComboBox()
         self.paper.addItems(PAPERS)
+        self.background = QCheckBox("Giữ nền và màu gốc (hoa văn, con dấu, ảnh)")
+        self.background.setToolTip("Dùng ảnh gốc đã xoá chữ làm nền, chữ thật vẽ đè lên.\n"
+                                   "Giống bản gốc hơn nhưng file PDF nặng hơn.")
         self.auto_crop = QCheckBox("Tự cắt mép và nắn phẳng ảnh chụp")
         self.tables = QCheckBox("Nhận dạng bảng có đường kẻ")
         self.figures = QCheckBox("Giữ hình ảnh (logo, con dấu, chữ ký)")
@@ -188,6 +194,7 @@ class SettingsPanel(QWidget):
         f2 = QFormLayout(pdf_box)
         f2.addRow("Phông chữ:", self.font)
         f2.addRow("Khổ giấy:", self.paper)
+        f2.addRow(self.background)
 
         lay = QVBoxLayout(self)
         lay.addWidget(ocr_box)
@@ -201,6 +208,7 @@ class SettingsPanel(QWidget):
             w.toggled.connect(self._ocr)
         self.font.currentIndexChanged.connect(self._render)
         self.paper.currentIndexChanged.connect(self._render)
+        self.background.toggled.connect(self._render)
 
     def load(self):
         s = self.settings
@@ -211,6 +219,7 @@ class SettingsPanel(QWidget):
         self.tables.setChecked(s.detect_tables)
         self.figures.setChecked(s.keep_figures)
         self.diacritics.setChecked(s.fix_diacritics)
+        self.background.setChecked(s.keep_background)
 
     def _ocr(self):
         s = self.settings
@@ -224,4 +233,5 @@ class SettingsPanel(QWidget):
     def _render(self):
         self.settings.font = self.font.currentText()
         self.settings.paper = self.paper.currentText()
+        self.settings.keep_background = self.background.isChecked()
         self.renderChanged.emit()
