@@ -14,6 +14,7 @@ from reportlab.platypus import Paragraph
 from . import APP_NAME, __version__
 from .fonts import FontSet, fit_font_px, get_fontset
 from .model import Page, TextBlock
+from .restore import restore_colors
 from .settings import PAPER_FIT_IMAGE, Settings
 
 A4 = (595.2756, 841.8898)
@@ -67,7 +68,11 @@ def _draw_exact(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float, o
             # 3 = invisible: the original pixels stay visible, the text is still searchable
             text.setTextRenderMode(3 if on_background and _show_original(block, w) else 0)
             text.textOut(w.text + (" " if i + 1 < len(words) else ""))
+    # The PDF text render mode outlives the text object; isolate it so an invisible word
+    # at the end of one block does not make the next block invisible too.
+    c.saveState()
     c.drawText(text)
+    c.restoreState()
 
 
 def _line_pitch(block: TextBlock, size_px: float) -> float:
@@ -110,11 +115,12 @@ def _draw_flow(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float):
     p.drawOn(c, g.x(x0), g.y(top) - ph + (style.leading - ascent) * 0.5)
 
 
-LOW_CONF = 80  # with the original background, words OCR is unsure of keep their original pixels
+LOW_CONF = 30  # with the original background, words OCR can barely read keep their original pixels
 
 
 def _show_original(block: TextBlock, w) -> bool:
-    return block.override_text is None and w.conf < LOW_CONF
+    # letters were checked against the dictionary; digits and symbols were not
+    return block.override_text is None and w.conf < LOW_CONF and not w.text.strip(".,;:!?").isalpha()
 
 
 def background(page: Page) -> np.ndarray:
@@ -133,7 +139,8 @@ def background(page: Page) -> np.ndarray:
             small_mask = cv2.resize(mask, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_NEAREST)
         else:
             small, small_mask = raw, mask
-        page.background = cv2.inpaint(small, small_mask, 4, cv2.INPAINT_TELEA)
+        # restore print-like colours first so the painted-out areas match clean paper
+        page.background = cv2.inpaint(restore_colors(small), small_mask, 4, cv2.INPAINT_TELEA)
     return page.background
 
 

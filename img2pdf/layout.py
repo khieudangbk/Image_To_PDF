@@ -405,6 +405,9 @@ def _block_color(prep: Prepared, block: TextBlock) -> tuple[float, float, float]
     hsv = cv2.cvtColor(np.uint8([[[b, g, r]]]), cv2.COLOR_BGR2HSV)[0, 0]
     if hsv[1] < 60 or hsv[2] < 80:
         return None
+    # photos darken and dull printed colours; lift them like the restored background
+    h_, s_, v_ = int(hsv[0]), min(255, int(hsv[1] * 1.3)), min(255, int(hsv[2] * 1.2))
+    b, g, r = cv2.cvtColor(np.uint8([[[h_, s_, v_]]]), cv2.COLOR_HSV2BGR)[0, 0]
     return (r / 255, g / 255, b / 255)
 
 
