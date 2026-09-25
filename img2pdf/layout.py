@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -13,6 +14,7 @@ from .tables import TableGrid, detect_rules, detect_tables
 from .vn_correct import correct_tokens
 
 _WORDLIKE = re.compile(r"\w", re.UNICODE)
+DARK_INK = 110  # HSV value below which a pixel is printed black ink rather than seal ink
 Segment = tuple[OLine, list]  # a (possibly partial) OCR line and its words
 
 
@@ -63,9 +65,9 @@ def _mark_bold(lines: list[Line], ink: np.ndarray, fs: FontSet):
                 w.bold = ratios[id(w)] > ref * 1.6
             continue
         share = sum(w.bold for w in long_words) / len(long_words)
-        if share >= 0.5 or share <= 0.2:
+        if share >= 0.6 or share <= 0.2:
             for w in ln.words:
-                w.bold = share >= 0.5
+                w.bold = share >= 0.6
 
 
 # ---------------------------------------------------------------- paragraph splitting
@@ -111,7 +113,8 @@ def split_paragraph(entries: list[Segment]) -> list[list[Segment]]:
         cur = [g[0]]
         for prev, seg, pitch in zip(g, g[1:], pitches):
             xs = max(prev[0].x_size, seg[0].x_size)
-            if pitch > 2.2 * xs or pitch > max(1.7 * xs, 1.45 * normal):
+            size_jump = xs > 1.3 * min(prev[0].x_size, seg[0].x_size)
+            if pitch > 2.2 * xs or pitch > max(1.7 * xs, 1.45 * normal) or size_jump:
                 out.append(cur)
                 cur = []
             cur.append(seg)
@@ -122,11 +125,31 @@ def split_paragraph(entries: list[Segment]) -> list[list[Segment]]:
 
 # ---------------------------------------------------------------- figures
 
-def _red_mask(color: np.ndarray) -> np.ndarray:
-    """Red ink (seals/stamps), which is kept as a picture even when it contains letters."""
+def _blue_mask(color: np.ndarray) -> np.ndarray:
+    """Ballpoint-pen blue; light bluish watermarks are excluded by the value limit."""
     hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
     hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    return (((hue < 10) | (hue > 160)) & (sat > 70) & (val < 245)).astype(np.uint8) * 255
+    return ((hue >= 95) & (hue <= 135) & (sat > 70) & (val < 210)).astype(np.uint8) * 255
+
+
+def _pen_word(prep: Prepared, wd) -> bool:
+    """Word whose ink is mostly blue pen: handwriting, which OCR reads as garbage."""
+    x0, y0, x1, y1 = wd.bbox
+    ink = prep.binary[y0:y1, x0:x1] > 0
+    if not ink.any():
+        return False
+    return float((_blue_mask(prep.color[y0:y1, x0:x1]) > 0)[ink].mean()) > 0.4
+
+
+def _red_mask(color: np.ndarray, strict: bool = False) -> np.ndarray:
+    """Red ink (seals/stamps). `strict` keeps only vivid red that cannot be black text lying on
+    a coloured background, so it is safe to erase before OCR."""
+    hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    red = (hue < 10) | (hue > 160)
+    if strict:
+        return (red & (sat > 110) & (val > 120) & (val < 250)).astype(np.uint8) * 255
+    return (red & (sat > 70) & (val < 245)).astype(np.uint8) * 255
 
 
 def _detect_figures(prep: Prepared, good_boxes: list[BBox], rule_mask: np.ndarray,
@@ -142,7 +165,11 @@ def _detect_figures(prep: Prepared, good_boxes: list[BBox], rule_mask: np.ndarra
     residual = cv2.bitwise_and(prep.binary, cv2.bitwise_not(cv2.bitwise_or(text_mask, rule_mask)))
     residual = cv2.morphologyEx(residual, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
 
-    candidates = cv2.bitwise_or(residual, _red_mask(prep.color))
+    # Red (seals) and blue (pen: signatures, handwritten dates) ink count even where OCR found
+    # words, except well-recognised words themselves.
+    colored = cv2.bitwise_or(_red_mask(prep.color), _blue_mask(prep.color))
+    colored = cv2.bitwise_and(colored, cv2.bitwise_not(text_mask))
+    candidates = cv2.bitwise_or(residual, colored)
 
     k = max(9, int(min(h, w) * 0.012))
     merged = cv2.dilate(candidates, np.ones((k, k), np.uint8))
@@ -162,7 +189,9 @@ def _detect_figures(prep: Prepared, good_boxes: list[BBox], rule_mask: np.ndarra
             continue
         pad = 4
         boxes.append((max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)))
-    return boxes
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])  # noqa: E731
+    return [b for b in boxes if not any(o is not b and area(o) > area(b) and _overlap_frac(b, o) > 0.8
+                                        for o in boxes)]
 
 
 def _overlap_frac(inner: BBox, outer: BBox) -> float:
@@ -203,8 +232,10 @@ def _alignment(lines: list[Line], c0: float, c1: float, font_px: float) -> str:
 
 # ---------------------------------------------------------------- tables
 
-def _ocr_cells(prep: Prepared, rule_mask: np.ndarray, cells: list[BBox], lang: str) -> dict[int, list[Segment]]:
+def _ocr_cells(prep: Prepared, rule_mask: np.ndarray, cells: list[BBox], lang: str,
+               gray: np.ndarray | None = None) -> dict[int, list[Segment]]:
     """OCRs all cells of a table in one Tesseract call by stacking the cell crops vertically."""
+    gray = prep.gray if gray is None else gray
     gap, pad = 90, 40
     crops, y_cursor, max_w = [], gap, 0
     for idx, (x0, y0, x1, y1) in enumerate(cells):
@@ -213,7 +244,7 @@ def _ocr_cells(prep: Prepared, rule_mask: np.ndarray, cells: list[BBox], lang: s
             continue
         if np.count_nonzero(prep.binary[cy0:cy1, cx0:cx1] & ~rule_mask[cy0:cy1, cx0:cx1]) < 15:
             continue
-        crop = prep.gray[cy0:cy1, cx0:cx1].copy()
+        crop = gray[cy0:cy1, cx0:cx1].copy()
         crop[rule_mask[cy0:cy1, cx0:cx1] > 0] = 255
         crops.append((idx, crop, cx0, cy0, y_cursor))
         y_cursor += crop.shape[0] + gap
@@ -258,14 +289,24 @@ def _dedupe_tables(tables: list[TableGrid], w: int, h: int) -> list[TableGrid]:
 
 
 def _recover_missed_text(prep: Prepared, rule_mask: np.ndarray, covered: list[BBox], x_size: float,
-                         lang: str, tentative: list[BBox]) -> tuple[list[TextBlock], set[int]]:
+                         lang: str, tentative: list[BBox], only_in: list[BBox] | None = None,
+                         gray: np.ndarray | None = None) -> tuple[list[TextBlock], set[int]]:
     """Second pass: OCR text-shaped ink that the page-level layout analysis skipped.
 
     `tentative` are figure candidates shaped like a line of text; the indices of those that
     turn out to be readable text are returned so they can be dropped as figures.
+    `only_in` limits the search to these regions and `gray` replaces the OCR source image
+    (used to read black text under seals from an image with the red ink removed).
     """
     h, w = prep.binary.shape
     ink = cv2.bitwise_and(prep.binary, cv2.bitwise_not(rule_mask))
+    if only_in is not None:
+        region = np.zeros_like(ink)
+        for x0, y0, x1, y1 in only_in:
+            region[y0:y1, x0:x1] = 255
+        ink = cv2.bitwise_and(ink, region)
+    if gray is not None:
+        ink[gray >= 250] = 0
     for x0, y0, x1, y1 in covered:
         ink[max(0, y0 - 3):y1 + 3, max(0, x0 - 3):x1 + 3] = 0
     ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
@@ -287,7 +328,7 @@ def _recover_missed_text(prep: Prepared, rule_mask: np.ndarray, covered: list[BB
     boxes += tentative
     if not boxes:
         return [], set()
-    found = _ocr_cells(prep, rule_mask, boxes, lang)
+    found = _ocr_cells(prep, rule_mask, boxes, lang, gray)
     out, converted = [], set()
     for idx, segs in found.items():
         segs = [(ol, [wd for wd in ws if wd.conf >= 60 and _WORDLIKE.search(wd.text)]) for ol, ws in segs]
@@ -304,12 +345,82 @@ def _recover_missed_text(prep: Prepared, rule_mask: np.ndarray, covered: list[BB
     return out, converted
 
 
-def _text_shaped(box: BBox, x_size: float, red: np.ndarray) -> bool:
+def _merge_into_line(blocks: list[TextBlock], extra: Line, x_size: float) -> bool:
+    """Puts recovered words into the existing line they belong to (same baseline, adjacent),
+    re-joining a word that OCR split in two ("b" + "ăng"). Returns True when merged."""
+    ex0, _, ex1, _ = extra.bbox
+    for b in blocks:
+        for ln in b.lines:
+            if abs(ln.baseline - extra.baseline) > 0.5 * x_size:
+                continue
+            lx0, _, lx1, _ = ln.bbox
+            if ex0 > lx1 + 4 * x_size or ex1 < lx0 - 4 * x_size:
+                continue
+            words = sorted(ln.words + extra.words, key=lambda w: w.bbox[0])
+            joined = [words[0]]
+            for wd in words[1:]:
+                prev = joined[-1]
+                if wd.bbox[0] - prev.bbox[2] < 0.12 * x_size and prev.text[-1:].isalpha() and wd.text[:1].isalpha():
+                    joined[-1] = Word(prev.text + wd.text, union([prev.bbox, wd.bbox]),
+                                      min(prev.conf, wd.conf), prev.bold)
+                else:
+                    joined.append(wd)
+            ln.words = joined
+            return True
+    return False
+
+
+def _text_shaped(box: BBox, x_size: float) -> bool:
+    """A wide, line-high region (possibly coloured text such as a red title) rather than a
+    round seal or a photo; worth an OCR attempt before it is kept as a picture."""
     x0, y0, x1, y1 = box
     bw, bh = x1 - x0, y1 - y0
-    if bh > 2.6 * x_size or bw < 1.5 * bh:
-        return False
-    return np.count_nonzero(red[y0:y1, x0:x1]) < 0.02 * bw * bh
+    return (bh <= 2.6 * x_size and bw >= 1.5 * bh) or (bh <= 6 * x_size and bw >= 2.5 * bh)
+
+
+def _rule_is_ink(prep: Prepared, r) -> bool:
+    """Only dark, neutral strokes are drawn as lines; paper edges, shadows and coloured
+    decorative frames are not."""
+    n = max(2, int(max(abs(r.x1 - r.x0), abs(r.y1 - r.y0)) // 4))
+    xs = np.linspace(r.x0, r.x1, n).astype(int).clip(0, prep.gray.shape[1] - 1)
+    ys = np.linspace(r.y0, r.y1, n).astype(int).clip(0, prep.gray.shape[0] - 1)
+    hsv = cv2.cvtColor(prep.color[ys, xs][None], cv2.COLOR_BGR2HSV)[0]
+    return float(np.median(prep.gray[ys, xs])) < 150 and float(np.median(hsv[:, 1])) < 90
+
+
+def _block_color(prep: Prepared, block: TextBlock) -> tuple[float, float, float] | None:
+    samples = []
+    for ln in block.lines:
+        for wd in ln.words:
+            x0, y0, x1, y1 = wd.bbox
+            ink = prep.binary[y0:y1, x0:x1] > 0
+            if ink.any():
+                samples.append(prep.color[y0:y1, x0:x1][ink])
+    if not samples:
+        return None
+    px = np.concatenate(samples)
+    gray = px.mean(1)
+    px = px[gray <= np.percentile(gray, 50)]  # stroke centres, not anti-aliased edges
+    b, g, r = np.median(px, axis=0)
+    hsv = cv2.cvtColor(np.uint8([[[b, g, r]]]), cv2.COLOR_BGR2HSV)[0, 0]
+    if hsv[1] < 60 or hsv[2] < 80:
+        return None
+    return (r / 255, g / 255, b / 255)
+
+
+def _figure_crop(prep: Prepared, box: BBox) -> np.ndarray:
+    x0, y0, x1, y1 = box
+    crop = prep.color[y0:y1, x0:x1].copy()
+    # Photos have large smooth areas that are not paper (skin, hair, backdrop); seals and
+    # signatures are thin strokes on paper.
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    lap = cv2.Laplacian(cv2.cvtColor(prep.raw[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), cv2.CV_32F)
+    if np.mean((np.abs(lap) < 8) & (gray < 225)) > 0.28:
+        return prep.raw[y0:y1, x0:x1].copy()
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    ink = (cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) < 170) | ((hsv[:, :, 1] > 80) & (hsv[:, :, 2] < 235))
+    crop[~ink] = 255  # drop paper, guilloche and watermark patterns
+    return crop
 
 
 # ---------------------------------------------------------------- text cleanup
@@ -318,14 +429,37 @@ _NOISE = {"|", "¦", "®", "©"}
 _ONE_LIKE = {"l", "I", "|", "]", "["}
 
 
+_VN_MARKS = {"̀", "́", "̃", "̉", "̣", "̂", "̆", "̛"}
+_PUNCT = set(".,;:!?-–—/\\()[]\"'“”‘’%&+*=@#°<>_…")
+
+
+def _plausible_chars(text: str) -> bool:
+    """Only Latin letters with Vietnamese diacritics, digits and ordinary punctuation."""
+    for ch in unicodedata.normalize("NFD", text):
+        if not (("a" <= ch.lower() <= "z") or ch.isdigit() or ch in "đĐ" or ch in _VN_MARKS or ch in _PUNCT):
+            return False
+    return True
+
+
 def _clean_text(block: TextBlock, fix_diacritics: bool):
     words = [w for ln in block.lines for w in ln.words]
     if block.kind == "cell" and len(words) == 1 and words[0].text in _ONE_LIKE:
         words[0].text = "1"  # a lone vertical stroke in a table cell is almost always the digit
         return
     for ln in block.lines:
-        ln.words = [w for w in ln.words if w.text not in _NOISE]
+        ln.words = [w for w in ln.words
+                    if w.text not in _NOISE and (w.conf >= 85 or _plausible_chars(w.text))]
+        # a lone dot/colon opening a line is a speck of background pattern, not punctuation
+        while len(ln.words) > 1 and ln.words[0].text in {".", ",", ":", ";", "'", "`", "¡"} \
+                and ln.words[0].conf < 95:
+            ln.words.pop(0)
     block.lines = [ln for ln in block.lines if ln.words]
+    words = [w for ln in block.lines for w in ln.words]
+    alnum = sum(ch.isalnum() for w in words for ch in w.text)
+    if block.kind != "cell" and words and (
+            alnum == 0 or (alnum <= 2 and np.mean([w.conf for w in words]) < 85)):
+        block.lines = []  # isolated specks next to seals, photos and handwriting
+        return
     if fix_diacritics:
         words = [w for ln in block.lines for w in ln.words]
         for w, t in zip(words, correct_tokens([w.text for w in words])):
@@ -343,6 +477,7 @@ def _to_line(seg: Segment) -> Line:
 def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     h, w = prep.binary.shape
     horiz, vert, rules = detect_rules(prep.binary)
+    rules = [r for r in rules if _rule_is_ink(prep, r)]
     rule_mask = cv2.dilate(cv2.bitwise_or(horiz, vert), np.ones((3, 3), np.uint8))
     tables = _dedupe_tables(detect_tables(horiz, vert), w, h) if settings.detect_tables else []
 
@@ -371,14 +506,23 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
         figure_boxes = _detect_figures(prep, [wd.bbox for wd in strict_good], rule_mask, tables)
     strict_ids = {id(wd) for wd in strict_good}
 
-    def keep(wd) -> bool:
-        if id(wd) not in strict_ids and any(center_in(wd.bbox, f) for f in figure_boxes):
+    def keep(wd, ol) -> bool:
+        if wd.conf < 90 and _pen_word(prep, wd):
             return False
-        return _is_good_word(wd, False)
+        line_conf = float(np.median([x.conf for x in ol.words]))
+        in_figure = any(center_in(wd.bbox, f) for f in figure_boxes)
+        if in_figure and id(wd) not in strict_ids:
+            # text crossing a seal stays text when the rest of its line reads well
+            return line_conf >= 80 and wd.conf >= 40 and bool(_WORDLIKE.search(wd.text))
+        if _is_good_word(wd, False):
+            return True
+        # A low-confidence word inside a well-read line is usually a real word with a doubtful
+        # accent (the dictionary pass repairs it), not noise.
+        return line_conf >= 80 and wd.conf >= 3 and wd.text.isalpha() and len(wd.text) >= 2
 
     blocks: list[TextBlock] = []
     for entries in par_entries:
-        entries = [(ol, [wd for wd in ws if keep(wd)]) for ol, ws in entries]
+        entries = [(ol, [wd for wd in ws if keep(wd, ol)]) for ol, ws in entries]
         entries = [e for e in entries if e[1]]
         if not entries:
             continue
@@ -396,18 +540,35 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     kept_lines = [ln for b in blocks + [b for _, b in cell_blocks] for ln in b.lines]
     if kept_lines:
         x_size = float(np.median([ln.x_size for ln in kept_lines]))
-        red = _red_mask(prep.color)
-        tentative_idx = [i for i, f in enumerate(figure_boxes) if _text_shaped(f, x_size, red)]
+        tentative_idx = [i for i, f in enumerate(figure_boxes) if _text_shaped(f, x_size)]
         solid = [f for i, f in enumerate(figure_boxes) if i not in tentative_idx]
         covered = [wd.bbox for ln in kept_lines for wd in ln.words] + figure_boxes + all_cells
         recovered, converted = _recover_missed_text(prep, rule_mask, covered, x_size, settings.lang,
                                                     [figure_boxes[i] for i in tentative_idx])
         figure_boxes = solid + [figure_boxes[i] for k, i in enumerate(tentative_idx) if k not in converted]
+
+        # Black text crossing a red seal: read it again from the dark pixels only. Printed black
+        # ink is far darker than seal ink, so a brightness cut separates them cleanly.
+        red = _red_mask(prep.color)
+        seals = [f for f in figure_boxes
+                 if np.count_nonzero(red[f[1]:f[3], f[0]:f[2]]) > 0.03 * (f[2] - f[0]) * (f[3] - f[1])]
+        if seals:
+            no_red = prep.gray.copy()
+            value = cv2.cvtColor(prep.color, cv2.COLOR_BGR2HSV)[:, :, 2]
+            for x0, y0, x1, y1 in seals:
+                sub = no_red[y0:y1, x0:x1]
+                sub[value[y0:y1, x0:x1] >= DARK_INK] = 255
+            done = [wd.bbox for ln in kept_lines for wd in ln.words] + \
+                [wd.bbox for b in recovered for ln in b.lines for wd in ln.words] + all_cells
+            under, _ = _recover_missed_text(prep, rule_mask, done, x_size, settings.lang, [],
+                                            only_in=seals, gray=no_red)
+            recovered += under
+
         existing = [wd.bbox for ln in kept_lines for wd in ln.words]
         for rb in recovered:
             for ln in rb.lines:
                 ln.words = [wd for wd in ln.words if not any(_overlap_frac(wd.bbox, e) > 0.3 for e in existing)]
-            rb.lines = [ln for ln in rb.lines if ln.words]
+            rb.lines = [ln for ln in rb.lines if ln.words and not _merge_into_line(blocks, ln, x_size)]
             if not rb.lines:
                 continue
             pos = next((i for i, b in enumerate(blocks) if b.bbox[1] > rb.bbox[1]), len(blocks))
@@ -431,6 +592,7 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
     font_px, sizes = {}, []
     for b in all_blocks:
         font_px[id(b)] = f = fit_font_px(b, fs)
+        b.color = _block_color(prep, b)
         sizes += [f] * len(b.text)
         if b.kind == "cell":
             b.align = _alignment(b.lines, b.container[0], b.container[2], f)
@@ -445,15 +607,21 @@ def build_page(source: str, prep: Prepared, settings: Settings) -> Page:
             b.kind, b.heading_level = "heading", 1
 
     figures = []
-    kept_words = [wd for b in all_blocks for ln in b.lines for wd in ln.words]
+    kept_words = [(wd, b.color is not None) for b in all_blocks for ln in b.lines for wd in ln.words]
     for box in figure_boxes:
         x0, y0, x1, y1 = box
-        crop = prep.color[y0:y1, x0:x1].copy()
-        crop[cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) > 215] = 255  # clean paper background
-        for wd in kept_words:  # text drawn as real text must not also appear inside the picture
-            if _overlap_frac(wd.bbox, box) > 0.5:
+        crop = _figure_crop(prep, box)
+        for wd, colored in kept_words:  # text drawn as real text must not also appear in the picture
+            if _overlap_frac(wd.bbox, box) > 0:
                 a0, b0, a1, b1 = wd.bbox
-                crop[max(0, b0 - y0 - 2):max(0, b1 - y0 + 2), max(0, a0 - x0 - 2):max(0, a1 - x0 + 2)] = 255
+                sub = crop[max(0, b0 - y0 - 2):max(0, b1 - y0 + 2), max(0, a0 - x0 - 2):max(0, a1 - x0 + 2)]
+                if sub.size:
+                    hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
+                    if colored:  # red/blue printed text: remove all of its ink
+                        text_ink = hsv[:, :, 2] < 235
+                    else:  # black text: remove only dark strokes, a seal underneath stays
+                        text_ink = hsv[:, :, 2] < DARK_INK
+                    sub[cv2.dilate(text_ink.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 255
         figures.append(Figure(box, crop))
     rules = [r for r in rules if not any(
         center_in((int(r.x0), int(r.y0), int(r.x1), int(r.y1)), f) for f in figure_boxes)]

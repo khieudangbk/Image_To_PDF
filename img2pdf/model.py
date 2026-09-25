@@ -48,6 +48,7 @@ class TextBlock:
     container: BBox | None = None    # cell box for table cells
     override_text: str | None = None
     font_px_override: float | None = None
+    color: tuple[float, float, float] | None = None  # RGB 0..1; None = black
 
     @property
     def bbox(self) -> BBox:

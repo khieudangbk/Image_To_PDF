@@ -59,6 +59,12 @@ class Lexicon:
                 if syl.isalpha():
                     self.index.setdefault(skeleton(syl), set()).add(syl)
                     self.count[syl] = self.count.get(syl, 0) + 1
+        # skeleton prefix -> longer skeletons (up to 2 extra letters), for truncated syllables
+        self.prefixes: dict[str, list[str]] = {}
+        for key in self.index:
+            for cut in (1, 2):
+                if len(key) - cut >= 2:
+                    self.prefixes.setdefault(key[:-cut], []).append(key)
 
     def has(self, *syllables: str) -> bool:
         return " ".join(syllables) in self.phrases
@@ -121,7 +127,13 @@ def correct_tokens(tokens: list[str]) -> list[str]:
         return n_orig <= MAX_ORIG_COUNT and lex.count.get(cand, 0) >= MIN_RATIO * max(n_orig, 1)
 
     def variants(i: int) -> set[str]:
-        return lex.index.get(skeleton(low[i]), set()) - {low[i]}
+        skel = skeleton(low[i])
+        out = set(lex.index.get(skel, set()))
+        if lex.count.get(low[i], 0) == 0 and len(skel) >= 2:
+            # not a real syllable: OCR may also have dropped a final letter ("ngh" -> "nghề")
+            for key in lex.prefixes.get(skel, ()):
+                out |= lex.index[key]
+        return out - {low[i]}
 
     out = list(tokens)
 
@@ -146,6 +158,8 @@ def correct_tokens(tokens: list[str]) -> list[str]:
     for i in range(n - 1):
         if not (suspicious(i) and suspicious(i + 1)):
             continue
+        if any(len(parts[j][1]) > 1 and parts[j][1].isupper() for j in (i, i + 1)):
+            continue  # all-caps pairs are mostly names ("ĐẶNG THỊ"); too risky to rewrite both
         pairs = []
         for a in variants(i):
             for b in variants(i + 1):

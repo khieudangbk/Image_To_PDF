@@ -4,6 +4,7 @@ from xml.sax.saxutils import escape
 import cv2
 import numpy as np
 from PIL import Image
+from reportlab.lib.colors import Color
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
@@ -96,6 +97,7 @@ def _draw_flow(c, block: TextBlock, fs: FontSet, g: Geometry, size_px: float):
             x0 = (left_pt - g.ox) / g.s
             width = min(need, page_w)
     style = ParagraphStyle("b", fontName=fs.regular, fontSize=size_pt,
+                           textColor=Color(*(block.color or (0, 0, 0))),
                            leading=_line_pitch(block, size_px) * g.s, alignment=_ALIGN.get(block.align, TA_LEFT))
     markup = "<br/>".join(escape(line) for line in block.text.split("\n"))
     if block.bold:
@@ -133,10 +135,10 @@ def draw_page(c, page: Page, settings: Settings, page_no: int):
         c.setLineWidth(max(0.4, r.thickness * g.s))
         c.line(g.x(r.x0), g.y(r.y0), g.x(r.x1), g.y(r.y1))
 
-    c.setFillColorRGB(0, 0, 0)
     for i, block in enumerate(page.blocks):
         if not block.text.strip():
             continue
+        c.setFillColorRGB(*(block.color or (0, 0, 0)))
         size_px = fit_font_px(block, fs)
         if block.override_text is not None:
             _draw_flow(c, block, fs, g, size_px)

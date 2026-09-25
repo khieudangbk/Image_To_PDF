@@ -82,3 +82,37 @@ bí thư
 giám đốc
 phó giám đốc
 tổng giám đốc
+chứng chỉ
+chứng chỉ hành nghề
+hành nghề
+khám bệnh
+chữa bệnh
+khám bệnh chữa bệnh
+sở y tế
+bộ y tế
+bác sĩ đa khoa
+chuyên khoa
+nội tổng hợp
+chứng minh nhân dân
+căn cước công dân
+nơi cấp
+ngày cấp
+địa chỉ cư trú
+văn bằng chuyên môn
+phạm vi hoạt động chuyên môn
+nghiệp vụ
+chuyển đổi số
+cấp chứng chỉ
+chứng minh
+giấy chứng minh
+giấy chứng minh nhân dân
+thường trú
+tạm trú
+quê quán
+nơi sinh
+ngày sinh
+ngày tháng năm sinh
+văn bằng
+văn bằng chuyên môn
+phạm vi
+phạm vi hoạt động
